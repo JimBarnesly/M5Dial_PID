@@ -1,0 +1,42 @@
+#pragma once
+
+#include <Arduino.h>
+
+namespace Config {
+constexpr uint8_t PIN_ONEWIRE = 13;
+constexpr uint8_t PIN_HEATER = 2;
+constexpr uint8_t PIN_BUZZER = 3;          // Dial v1.1 docs list buzzer on G3
+constexpr uint8_t PIN_BUTTON = 0;          // M5Dial center button
+
+constexpr bool HEATER_ACTIVE_HIGH = true;
+
+constexpr float DEFAULT_SETPOINT_C = 65.0f;
+constexpr float DEFAULT_STAGE_START_BAND_C = 2.0f;
+constexpr float STAGE_AT_TEMP_BAND_C = 0.3f;
+constexpr float DEFAULT_OVER_TEMP_C = 99.0f;
+constexpr float SENSOR_FAULT_LOW_C = -10.0f;
+constexpr float SENSOR_FAULT_HIGH_C = 150.0f;
+
+constexpr uint32_t PID_WINDOW_MS = 2000;
+constexpr float PID_KP = 18.0f;
+constexpr float PID_KI = 0.08f;
+constexpr float PID_KD = 20.0f;
+
+constexpr uint32_t TEMP_SAMPLE_MS = 1000;
+constexpr uint32_t MQTT_RECONNECT_MS = 5000;
+constexpr uint32_t UI_REFRESH_MS = 100;
+constexpr uint32_t STATUS_PUBLISH_MS = 2000;
+constexpr uint32_t HOLD_COMPLETE_BEEP_MS = 1800;
+constexpr uint32_t ALARM_BEEP_MS = 700;
+constexpr uint32_t TEMP_RISE_EVAL_MS = 120000;   // 2 min
+constexpr float MIN_EXPECTED_RISE_C = 0.2f;
+
+constexpr uint8_t MAX_STAGES = 8;
+constexpr uint8_t MAX_PROFILES = 6;
+
+constexpr char WIFI_AP_NAME[] = "BrewCore-HLT";
+constexpr char WIFI_AP_PASS[] = "brewmaster";
+
+constexpr char MQTT_CLIENT_ID[] = "brewcore_hlt_controller";
+constexpr char MQTT_TOPIC_BASE[] = "brew/hlt";
+}
