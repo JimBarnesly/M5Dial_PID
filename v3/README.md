@@ -20,10 +20,3 @@ Current UX behaviour:
 
 Known limitation:
 - Settings icon is visual only in this build.
-
-
-V4 notes:
-- display layer rewritten to follow the Stitch screen much more closely
-- static chrome is drawn once, with only changed regions refreshed
-- ring follows the outer thin countdown layout from the Stitch mock
-- bottom icons are rendered with primitives instead of text glyphs for runtime stability

@@ -139,29 +139,17 @@ void processInput() {
   if (M5Dial.BtnA.wasClicked()) {
     gRt.editSetpointMode = !gRt.editSetpointMode;
     gDisplay.invalidateAll();
-    gDisplay.requestImmediateUi();
-    if (gRt.editSetpointMode) {
-      M5Dial.Speaker.tone(6000, 20);
-    } else {
-      M5Dial.Speaker.tone(4000, 20);
-    }
   }
 
-  static int32_t lastEnc = 0;
   const int32_t enc = M5Dial.Encoder.read();
+  static int32_t lastEnc = enc;
   const int32_t diff = enc - lastEnc;
+  lastEnc = enc;
 
-  if (diff != 0) {
-    lastEnc = enc;
-    if (gRt.editSetpointMode && gCfg.controlLock != ControlLock::RemoteOnly) {
-      gRt.controlMode = ControlMode::Local;
-      gCfg.localSetpointC = constrain(gCfg.localSetpointC + diff * 1.0f, 20.0f, 100.0f);
-      gRt.currentSetpointC = gCfg.localSetpointC;
-      gDisplay.requestImmediateUi();
-    } else {
-      // Still refresh the target row so the user sees the edit affordance immediately.
-      gDisplay.requestImmediateUi();
-    }
+  if (gRt.editSetpointMode && diff != 0 && gCfg.controlLock != ControlLock::RemoteOnly) {
+    gRt.controlMode = ControlMode::Local;
+    gCfg.localSetpointC = constrain(gCfg.localSetpointC + diff * 0.1f, 20.0f, 100.0f);
+    gRt.currentSetpointC = gCfg.localSetpointC;
   }
 }
 
