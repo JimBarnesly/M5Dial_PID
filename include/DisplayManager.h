@@ -19,7 +19,7 @@ private:
   String formatMinutes(uint32_t minutes);
 
   void drawStaticUi();
-  void drawRing(float progress, bool timerStarted, RunState runState, bool force = false);
+  void drawRing(float progress, bool timerStarted, RunState runState, uint32_t remainingSec, bool force = false);
   void drawStagePill(const RuntimeState& rt, const BrewStage* stage, bool force = false);
   void drawCenterTemp(const RuntimeState& rt, uint32_t now, bool force = false);
   void drawTargetRow(const RuntimeState& rt, bool force = false);
@@ -29,6 +29,7 @@ private:
   void drawWifiGlyph(int x, int y, uint16_t color);
   void drawFireGlyph(int x, int y, uint16_t color);
   void drawSettingsIcon(int x, int y, uint16_t color);
+  bool hitRectPressed(int x, int y, int w, int h);
 
   bool _lastStageTimerStarted = false;
   bool _staticDrawn = false;
