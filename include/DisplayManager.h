@@ -56,5 +56,6 @@ private:
   UiMode _lastUiMode = static_cast<UiMode>(255);
 
   char _lastStageName[64] = {0};
+  char _lastTempText[16] = {0};
   char _lastInfoText[32] = {0};
 };
