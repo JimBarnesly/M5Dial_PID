@@ -43,6 +43,8 @@ private:
   uint32_t _lastRingDrawMs = 0;
   uint32_t _lastRingRemainingSec = UINT32_MAX;
   uint32_t _lastRemainingSec = UINT32_MAX;
+  int _lastRingSweep = -1;
+  uint8_t _lastRingMode = 0;
 
   float _lastTempC = NAN;
   float _lastSetpointC = NAN;

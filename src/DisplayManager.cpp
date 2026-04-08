@@ -74,6 +74,8 @@ void DisplayManager::invalidateAll() {
   _lastRingRemainingSec = UINT32_MAX;
   _lastStageTimerStarted = false;
   _lastRemainingSec = UINT32_MAX;
+  _lastRingSweep = -1;
+  _lastRingMode = 0;
 
   _lastTempC = NAN;
   _lastSetpointC = NAN;
@@ -187,25 +189,45 @@ void DisplayManager::drawRing(float progress, bool timerStarted, RunState runSta
   if (!force && !_ringDirty && !runStateChanged && !timerStateChanged && !secondChanged) return;
 
   auto& d = M5Dial.Display;
-  d.fillArc(kCx, kCy, kRingOuter, kRingInner, 0, 360, BG);
-  d.drawArc(kCx, kCy, kRingOuter, kRingInner, 0, 360, rgb(38, 38, 38));
+  const bool ringEnabled = (runState == RunState::Running || runState == RunState::Paused || runState == RunState::Complete);
+  const bool dimMode = ringEnabled && !timerStarted && runState != RunState::Complete;
+  const bool activeMode = ringEnabled && !dimMode;
+  const uint8_t ringMode = dimMode ? 1 : (activeMode ? 2 : 0);
+  const float clamped = constrain(progress, 0.0f, 1.0f);
+  const int sweep = activeMode ? int(kRingSweep * clamped + 0.5f) : 0;
+  const bool needFullRedraw = force || _ringDirty || runStateChanged || timerStateChanged || (_lastRingMode != ringMode);
 
-  if (runState == RunState::Running || runState == RunState::Paused || runState == RunState::Complete) {
-    if (!timerStarted && runState != RunState::Complete) {
+  if (needFullRedraw) {
+    d.fillArc(kCx, kCy, kRingOuter, kRingInner, 0, 360, BG);
+    d.drawArc(kCx, kCy, kRingOuter, kRingInner, 0, 360, rgb(38, 38, 38));
+
+    if (dimMode) {
       d.fillArc(kCx, kCy, kRingOuter, kRingInner, kRingStart, kRingStart + kRingSweep, RING_DIM);
+    } else if (activeMode && sweep > 0) {
+      d.fillArc(kCx, kCy, kRingOuter, kRingInner, kRingStart, kRingStart + sweep, RING);
+      d.drawArc(kCx, kCy, kRingOuter, kRingOuter - 1, kRingStart, kRingStart + sweep, rgb(145, 205, 255));
+    }
+  } else if (activeMode && secondChanged && _lastRingSweep >= 0 && sweep != _lastRingSweep) {
+    const int oldSweep = _lastRingSweep;
+    if (sweep < oldSweep) {
+      const int eraseStart = kRingStart + sweep;
+      const int eraseEnd = kRingStart + oldSweep;
+      d.fillArc(kCx, kCy, kRingOuter, kRingInner, eraseStart, eraseEnd, BG);
+      d.drawArc(kCx, kCy, kRingOuter, kRingInner, eraseStart, eraseEnd, rgb(38, 38, 38));
+      d.drawArc(kCx, kCy, kRingOuter, kRingOuter - 1, kRingStart, kRingStart + sweep, rgb(145, 205, 255));
     } else {
-      const float clamped = constrain(progress, 0.0f, 1.0f);
-      const int sweep = int(kRingSweep * clamped + 0.5f);
-      if (sweep > 0) {
-        d.fillArc(kCx, kCy, kRingOuter, kRingInner, kRingStart, kRingStart + sweep, RING);
-        d.drawArc(kCx, kCy, kRingOuter, kRingOuter - 1, kRingStart, kRingStart + sweep, rgb(145, 205, 255));
-      }
+      const int growStart = kRingStart + oldSweep;
+      const int growEnd = kRingStart + sweep;
+      d.fillArc(kCx, kCy, kRingOuter, kRingInner, growStart, growEnd, RING);
+      d.drawArc(kCx, kCy, kRingOuter, kRingOuter - 1, growStart, growEnd, rgb(145, 205, 255));
     }
   }
 
   _ringDirty = false;
   _lastStageTimerStarted = timerStarted;
   _lastRingRemainingSec = remainingKey;
+  _lastRingSweep = sweep;
+  _lastRingMode = ringMode;
 }
 
 void DisplayManager::drawStagePill(const RuntimeState& rt, const BrewStage* stage, bool force) {
