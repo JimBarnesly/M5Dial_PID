@@ -17,7 +17,10 @@ constexpr int kPillY = 42;
 constexpr int kPillW = 160;
 constexpr int kPillH = 24;
 constexpr int kPillCenterX = kPillX + (kPillW / 2);
-constexpr int kPillCenterY = kPillY + (kPillH / 2);
+constexpr int kStageTextX = 64;
+constexpr int kStageTextY = 42;
+constexpr int kStageTextW = 112;
+constexpr int kStageTextH = 26;
 
 constexpr int kTempBoxX = 52;
 constexpr int kTempBoxY = 74;
@@ -44,9 +47,7 @@ constexpr uint16_t FG = 0xFFFF;
 constexpr uint16_t FG_MUTED = 0xBDF7;
 constexpr uint16_t GOLD = 0xFEA0;
 constexpr uint16_t RED = 0xF800;
-constexpr uint16_t RED_DARK = 0x8000;
 constexpr uint16_t BLUE = 0x051D;
-constexpr uint16_t SURFACE_LOW = 0x18C3;
 constexpr uint16_t OUTLINE_SOFT = 0x39E7;
 constexpr uint16_t RING = 0x051D;
 constexpr uint16_t RING_DIM = 0x18C3;
@@ -87,6 +88,7 @@ void DisplayManager::invalidateAll() {
   _lastUiMode = static_cast<UiMode>(255);
 
   _lastStageName[0] = '\0';
+  _lastTempText[0] = '\0';
   _lastInfoText[0] = '\0';
 }
 
@@ -243,27 +245,20 @@ void DisplayManager::drawStagePill(const RuntimeState& rt, const BrewStage* stag
   if (!force && strcmp(_lastStageName, text) == 0 && _lastAlarm == rt.activeAlarm && _lastRunState == rt.runState && _lastUiMode == rt.uiMode) return;
 
   auto& d = M5Dial.Display;
-  d.fillRect(kPillX, 38, kPillW, 34, BG);
-  d.fillRoundRect(kPillX, kPillY, kPillW, kPillH, 12, SURFACE_LOW);
-  d.drawRoundRect(kPillX, kPillY, kPillW, kPillH, 12, rgb(30, 30, 30));
-  d.drawRoundRect(kPillX + 1, kPillY + 1, kPillW - 2, kPillH - 2, 11, rgb(45, 45, 45));
+  d.fillRect(kStageTextX, kStageTextY, kStageTextW, kStageTextH, BG);
 
   d.setFont(&fonts::Font2);
-  d.setTextColor(FG_MUTED, SURFACE_LOW);
+  d.setTextDatum(top_center);
   if (rt.activeAlarm != AlarmCode::None) {
-    d.setTextDatum(top_center);
-    d.drawString(text, kPillCenterX, kPillY + 2);
+    d.setTextColor(FG_MUTED, BG);
+    d.drawString(text, kPillCenterX, kPillY + 1);
     d.setFont(&fonts::Font0);
-    d.setTextColor(GOLD, SURFACE_LOW);
+    d.setTextColor(GOLD, BG);
     d.drawString("TAP TO ACK", kPillCenterX, kPillY + 14);
   } else {
-    d.setTextDatum(middle_center);
-    d.drawString(text, kPillCenterX, kPillCenterY);
+    d.setTextColor(FG_MUTED, BG);
+    d.drawString(text, kPillCenterX, kPillY + 5);
   }
-
-  const int textWidth = d.textWidth(text);
-  const int textLeftX = kPillCenterX - (textWidth / 2);
-  d.fillCircle(textLeftX - 8, kPillCenterY, 4, rt.activeAlarm != AlarmCode::None ? RED : RED_DARK);
 
   strlcpy(_lastStageName, text, sizeof(_lastStageName));
   _lastAlarm = rt.activeAlarm;
@@ -276,23 +271,60 @@ void DisplayManager::drawCenterTemp(const RuntimeState& rt, uint32_t now, bool f
   if (!force && !isnan(_lastTempC) && !isnan(rt.currentTempC) && fabsf(_lastTempC - rt.currentTempC) < 0.05f) return;
 
   auto& d = M5Dial.Display;
-  d.fillRect(kTempBoxX, kTempBoxY, kTempBoxW, kTempBoxH, BG);
 
   char tempBuf[16];
   if (isnan(rt.currentTempC)) snprintf(tempBuf, sizeof(tempBuf), "--.-");
   else snprintf(tempBuf, sizeof(tempBuf), "%.1f", rt.currentTempC);
 
-  d.setTextDatum(middle_center);
   d.setFont(&fonts::Font7);
-  d.setTextColor(rgb(90, 70, 28), BG);
-  d.drawString(tempBuf, 116, 104);
-  d.setTextColor(FG, BG);
-  d.drawString(tempBuf, 114, 102);
+  const int newWidth = d.textWidth(tempBuf);
+  const int oldWidth = (_lastTempText[0] != '\0') ? d.textWidth(_lastTempText) : -1;
+  const int lenNew = strlen(tempBuf);
+  const int lenOld = strlen(_lastTempText);
 
-  d.setFont(&fonts::Font4);
-  d.setTextColor(GOLD, BG);
-  d.drawString("C", 180, 86);
+  const bool fullRedraw = force || _lastTempText[0] == '\0' || oldWidth != newWidth || lenOld != lenNew;
+  if (fullRedraw) {
+    d.fillRect(kTempBoxX, kTempBoxY, kTempBoxW, kTempBoxH, BG);
 
+    d.setTextDatum(middle_center);
+    d.setTextColor(rgb(90, 70, 28), BG);
+    d.drawString(tempBuf, 116, 104);
+    d.setTextColor(FG, BG);
+    d.drawString(tempBuf, 114, 102);
+
+    d.setFont(&fonts::Font4);
+    d.setTextColor(GOLD, BG);
+    d.drawString("C", 180, 86);
+  } else {
+    const int startX = 114 - (newWidth / 2);
+    const int fontHeight = d.fontHeight();
+    const int y = 102 - (fontHeight / 2);
+
+    d.setTextDatum(top_left);
+    for (int i = 0; i < lenNew; ++i) {
+      if (_lastTempText[i] == tempBuf[i]) continue;
+
+      char oldCh[2] = {_lastTempText[i], '\0'};
+      char newCh[2] = {tempBuf[i], '\0'};
+      char prefix[16] = {0};
+      if (i > 0) {
+        memcpy(prefix, tempBuf, i);
+        prefix[i] = '\0';
+      }
+
+      const int charX = startX + d.textWidth(prefix);
+      const int oldW = d.textWidth(oldCh);
+      const int newW = d.textWidth(newCh);
+      d.fillRect(charX - 1, y - 1, max(oldW, newW) + 2, fontHeight + 2, BG);
+
+      d.setTextColor(rgb(90, 70, 28), BG);
+      d.drawString(newCh, charX + 2, y + 2);
+      d.setTextColor(FG, BG);
+      d.drawString(newCh, charX, y);
+    }
+  }
+
+  strlcpy(_lastTempText, tempBuf, sizeof(_lastTempText));
   _lastTempC = rt.currentTempC;
   _lastTempDrawMs = now;
 }
