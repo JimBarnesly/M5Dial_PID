@@ -22,6 +22,13 @@ enum class RunState : uint8_t {
   Fault
 };
 
+enum class UiMode : uint8_t {
+  SetpointAdjust = 0,
+  StageTimeAdjust,
+  Running,
+  Paused
+};
+
 enum class AlarmCode : uint8_t {
   None = 0,
   SensorFault,
@@ -45,6 +52,7 @@ struct BrewProfile {
 struct PersistentConfig {
   ControlLock controlLock {ControlLock::LocalOrRemote};
   float localSetpointC {Config::DEFAULT_SETPOINT_C};
+  uint32_t manualStageMinutes {Config::DEFAULT_STAGE_MINUTES};
   float stageStartBandC {Config::DEFAULT_STAGE_START_BAND_C};
   float overTempC {Config::DEFAULT_OVER_TEMP_C};
   char mqttHost[64] {"192.168.1.10"};
@@ -59,6 +67,7 @@ struct PersistentConfig {
 struct RuntimeState {
   ControlMode controlMode {ControlMode::Local};
   RunState runState {RunState::Idle};
+  UiMode uiMode {UiMode::SetpointAdjust};
 
   float currentTempC {NAN};
   float currentSetpointC {Config::DEFAULT_SETPOINT_C};
@@ -68,11 +77,12 @@ struct RuntimeState {
   bool mqttConnected {false};
   bool sensorHealthy {false};
   bool heatingEnabled {false};
-  bool editSetpointMode {false};
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};
+  bool heatOn {false};
 
   uint8_t currentStageIndex {0};
+  uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
   uint32_t stageStartedAtMs {0};
   uint32_t stageHoldStartedAtMs {0};
 

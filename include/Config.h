@@ -1,17 +1,16 @@
 #pragma once
 
 #include <Arduino.h>
-
 namespace Config {
 constexpr uint8_t PIN_ONEWIRE = 13;
 constexpr uint8_t PIN_HEATER = 2;
 constexpr uint8_t PIN_BUZZER = 3;          // Dial v1.1 docs list buzzer on G3
-constexpr uint8_t PIN_BUTTON = 0;          // M5Dial center button
 
 constexpr bool HEATER_ACTIVE_HIGH = true;
 
 constexpr float DEFAULT_SETPOINT_C = 65.0f;
 constexpr float DEFAULT_STAGE_START_BAND_C = 2.0f;
+constexpr uint32_t DEFAULT_STAGE_MINUTES = 60;
 constexpr float STAGE_AT_TEMP_BAND_C = 0.3f;
 constexpr float DEFAULT_OVER_TEMP_C = 99.0f;
 constexpr float SENSOR_FAULT_LOW_C = -10.0f;
@@ -32,7 +31,7 @@ constexpr uint32_t TEMP_RISE_EVAL_MS = 120000;   // 2 min
 constexpr float MIN_EXPECTED_RISE_C = 0.2f;
 
 constexpr uint32_t UI_SERVICE_MS = 33;           // ~30 FPS service loop for responsive widgets
-constexpr uint32_t UI_TEMP_TEXT_MS = 10000;      // user-requested slow temp refresh
+constexpr uint32_t UI_TEMP_TEXT_MS = 1000;       // 1s temp refresh
 constexpr uint32_t UI_STATUS_TEXT_MS = 250;
 constexpr uint32_t UI_RING_MS = 1000;
 constexpr uint32_t UI_FORCE_REFRESH_MS = 30000;
@@ -45,4 +44,6 @@ constexpr char WIFI_AP_PASS[] = "brewmaster";
 
 constexpr char MQTT_CLIENT_ID[] = "brewcore_hlt_controller";
 constexpr char MQTT_TOPIC_BASE[] = "brew/hlt";
+
+constexpr uint32_t UI_TEMP_MS = 1000;
 }

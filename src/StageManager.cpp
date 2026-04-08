@@ -1,96 +1,119 @@
 #include "StageManager.h"
-#include "Config.h"
+#include "DebugControl.h"
 #include <Arduino.h>
-#include <cmath>
+#include <cstring>
 
 void StageManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _cfg = cfg;
   _rt = rt;
+  memset(&_manualStage, 0, sizeof(_manualStage));
+  strlcpy(_manualStage.name, "MANUAL STAGE", sizeof(_manualStage.name));
 }
 
-void StageManager::startProfile(uint8_t index) {
-  if (!_cfg || !_rt || index >= _cfg->profileCount) return;
-  _cfg->activeProfileIndex = index;
+void StageManager::startProfile(uint8_t) {
+  if (!_cfg || !_rt) return;
+  DBG_LOGF("StageManager: start manual stage temp=%.2f minutes=%lu\n",
+           _cfg->localSetpointC,
+           static_cast<unsigned long>(_cfg->manualStageMinutes));
   _rt->currentStageIndex = 0;
+  _rt->currentSetpointC = _cfg->localSetpointC;
+  _rt->activeStageMinutes = _cfg->manualStageMinutes;
   _rt->runState = RunState::Running;
+  _rt->uiMode = UiMode::Running;
   _rt->stageTimerStarted = false;
   _rt->stageHoldStartedAtMs = 0;
   _rt->stageStartedAtMs = millis();
-
-  const BrewStage& s = _cfg->profiles[index].stages[0];
-  _rt->currentSetpointC = s.targetC;
+  strlcpy(_manualStage.name, "RUNNING", sizeof(_manualStage.name));
+  _manualStage.targetC = _rt->currentSetpointC;
+  _manualStage.holdSeconds = _rt->activeStageMinutes * 60UL;
 }
 
 void StageManager::pause() {
-  if (_rt && _rt->runState == RunState::Running) _rt->runState = RunState::Paused;
+  if (_rt && _rt->runState == RunState::Running) {
+    DBG_LOGLN("StageManager: pause");
+    _rt->runState = RunState::Paused;
+    _rt->uiMode = UiMode::Paused;
+    strlcpy(_manualStage.name, "PAUSED", sizeof(_manualStage.name));
+  }
 }
 
 void StageManager::resume() {
-  if (_rt && _rt->runState == RunState::Paused) _rt->runState = RunState::Running;
+  if (_rt && _rt->runState == RunState::Paused) {
+    DBG_LOGLN("StageManager: resume");
+    _rt->runState = RunState::Running;
+    _rt->uiMode = UiMode::Running;
+    strlcpy(_manualStage.name, "RUNNING", sizeof(_manualStage.name));
+  }
 }
 
 void StageManager::stop() {
   if (!_rt) return;
+  DBG_LOGLN("StageManager: stop");
   _rt->runState = RunState::Idle;
+  _rt->uiMode = UiMode::SetpointAdjust;
   _rt->currentStageIndex = 0;
   _rt->stageTimerStarted = false;
   _rt->stageHoldStartedAtMs = 0;
+  _rt->activeStageMinutes = _cfg ? _cfg->manualStageMinutes : 0;
+  strlcpy(_manualStage.name, "IDLE", sizeof(_manualStage.name));
+  _manualStage.targetC = _cfg ? _cfg->localSetpointC : 0.0f;
+  _manualStage.holdSeconds = (_cfg ? _cfg->manualStageMinutes : 0) * 60UL;
 }
 
 const BrewProfile* StageManager::getActiveProfile() const {
-  if (!_cfg || _cfg->profileCount == 0) return nullptr;
-  return &_cfg->profiles[_cfg->activeProfileIndex];
+  return nullptr;
 }
 
 const BrewStage* StageManager::getCurrentStage() const {
-  const BrewProfile* profile = getActiveProfile();
-  if (!profile || !_rt || _rt->currentStageIndex >= profile->stageCount) return nullptr;
-  return &profile->stages[_rt->currentStageIndex];
+  if (!_cfg || !_rt) return nullptr;
+  switch (_rt->uiMode) {
+    case UiMode::SetpointAdjust:
+      strlcpy(_manualStage.name, "SET TEMP", sizeof(_manualStage.name));
+      break;
+    case UiMode::StageTimeAdjust:
+      strlcpy(_manualStage.name, "SET TIME", sizeof(_manualStage.name));
+      break;
+    case UiMode::Running:
+      strlcpy(_manualStage.name, "RUNNING", sizeof(_manualStage.name));
+      break;
+    case UiMode::Paused:
+      strlcpy(_manualStage.name, "PAUSED", sizeof(_manualStage.name));
+      break;
+  }
+  _manualStage.targetC = _rt->currentSetpointC;
+  _manualStage.holdSeconds = _rt->activeStageMinutes * 60UL;
+  return &_manualStage;
 }
 
 uint32_t StageManager::getRemainingSeconds() const {
-  const BrewStage* stage = getCurrentStage();
-  if (!stage || !_rt || !_rt->stageTimerStarted) return stage ? stage->holdSeconds : 0;
-
-  const uint32_t elapsed = (millis() - _rt->stageHoldStartedAtMs) / 1000;
-  return (elapsed >= stage->holdSeconds) ? 0 : (stage->holdSeconds - elapsed);
+  if (!_rt) return 0;
+  const uint32_t totalSec = _rt->activeStageMinutes * 60UL;
+  if (!_rt->stageTimerStarted) return totalSec;
+  const uint32_t elapsed = (millis() - _rt->stageHoldStartedAtMs) / 1000UL;
+  return (elapsed >= totalSec) ? 0 : (totalSec - elapsed);
 }
 
 void StageManager::update(float currentTempC) {
   if (!_cfg || !_rt || _rt->runState != RunState::Running) return;
 
-  const BrewProfile* profile = getActiveProfile();
-  if (!profile) return;
-  if (_rt->currentStageIndex >= profile->stageCount) {
-    _rt->runState = RunState::Complete;
-    return;
-  }
-
-  const BrewStage& stage = profile->stages[_rt->currentStageIndex];
-  _rt->currentSetpointC = stage.targetC;
-
-  const float threshold = stage.targetC - _cfg->stageStartBandC;
-  const bool nearTarget = fabs(currentTempC - stage.targetC) <= Config::STAGE_AT_TEMP_BAND_C;
-
-  if (!_rt->stageTimerStarted && currentTempC >= threshold) {
+  const float targetC = _rt->currentSetpointC;
+  if (!_rt->stageTimerStarted && !isnan(currentTempC) && currentTempC >= targetC) {
     _rt->stageTimerStarted = true;
     _rt->stageHoldStartedAtMs = millis();
+    DBG_LOGF("StageManager: timer started temp=%.2f target=%.2f\n", currentTempC, targetC);
   }
 
   if (_rt->stageTimerStarted) {
-    const uint32_t elapsedSec = (millis() - _rt->stageHoldStartedAtMs) / 1000;
-    if (elapsedSec >= stage.holdSeconds) {
-      _rt->currentStageIndex++;
+    const uint32_t totalSec = _rt->activeStageMinutes * 60UL;
+    const uint32_t elapsedSec = (millis() - _rt->stageHoldStartedAtMs) / 1000UL;
+    if (elapsedSec >= totalSec) {
+      DBG_LOGLN("StageManager: manual stage complete");
+      _rt->runState = RunState::Complete;
+      _rt->uiMode = UiMode::SetpointAdjust;
+      _rt->pendingProfileCompletePublish = true;
       _rt->stageTimerStarted = false;
       _rt->stageHoldStartedAtMs = 0;
-      _rt->stageStartedAtMs = millis();
-
-      if (_rt->currentStageIndex >= profile->stageCount) {
-        _rt->runState = RunState::Complete;
-        _rt->pendingProfileCompletePublish = true;
-      }
+      strlcpy(_manualStage.name, "COMPLETE", sizeof(_manualStage.name));
     }
   }
-
-  (void)nearTarget;
 }

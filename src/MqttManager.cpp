@@ -1,5 +1,6 @@
 #include "MqttManager.h"
 #include "Config.h"
+#include "DebugControl.h"
 #include <ArduinoJson.h>
 #include <functional>
 
@@ -23,11 +24,20 @@ void MqttManager::update() {
   if (!_cfg || !_rt) return;
 
   _client.setServer(_cfg->mqttHost, _cfg->mqttPort);
-  if (!_client.connected()) {
-    tryReconnect();
-  } else {
-    _client.loop();
+
+  if (!_rt->wifiConnected) {
+    _rt->mqttConnected = false;
+    return;
   }
+
+  if (_client.connected()) {
+    // MQTT loop servicing
+    _client.loop();
+    _rt->mqttConnected = true;
+    return;
+  }
+
+  tryReconnect();
   _rt->mqttConnected = _client.connected();
 }
 
@@ -43,7 +53,10 @@ void MqttManager::tryReconnect() {
   }
 
   if (ok) {
+    DBG_LOGLN("MQTT connected");
     subscribeTopics();
+  } else {
+    DBG_LOGLN("MQTT reconnect failed");
   }
 }
 

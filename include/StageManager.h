@@ -4,7 +4,7 @@
 class StageManager {
 public:
   void begin(PersistentConfig* cfg, RuntimeState* rt);
-  void startProfile(uint8_t index);
+  void startProfile(uint8_t index = 0);
   void pause();
   void resume();
   void stop();
@@ -16,4 +16,5 @@ public:
 private:
   PersistentConfig* _cfg {nullptr};
   RuntimeState* _rt {nullptr};
+  mutable BrewStage _manualStage {};
 };
