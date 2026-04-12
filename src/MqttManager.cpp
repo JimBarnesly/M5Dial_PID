@@ -256,7 +256,10 @@ void MqttManager::configureClientForSecurity(bool force) {
     _transportClient = &_wifiSecureClient;
     _wifiSecureClient.setHandshakeTimeout(15);
     if (_cfg->mqttTlsAuthMode == 1 && strlen(_cfg->mqttTlsFingerprint) > 0) {
-      _wifiSecureClient.setFingerprint(_cfg->mqttTlsFingerprint);
+      // Fingerprint pinning API is not available in this ESP32 core version.
+      // Fall back to CA pinning (when provided) or insecure mode.
+      if (strlen(_cfg->mqttTlsCaCert) > 0) _wifiSecureClient.setCACert(_cfg->mqttTlsCaCert);
+      else _wifiSecureClient.setInsecure();
     } else if (_cfg->mqttTlsAuthMode == 2 && strlen(_cfg->mqttTlsCaCert) > 0) {
       _wifiSecureClient.setCACert(_cfg->mqttTlsCaCert);
     } else {

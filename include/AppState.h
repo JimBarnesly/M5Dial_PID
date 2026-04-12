@@ -83,6 +83,8 @@ struct PersistentConfig {
   uint8_t mqttTlsAuthMode {0};  // 0=none, 1=fingerprint pin, 2=CA cert pin
   char mqttTlsFingerprint[96] {""};  // e.g. AA:BB:...
   char mqttTlsCaCert[768] {""};      // PEM
+  uint16_t mqttCommsTimeoutSec {0};
+  MqttFallbackMode mqttFallbackMode {MqttFallbackMode::HoldSetpoint};
   float pidKp {Config::PID_KP};
   float pidKi {Config::PID_KI};
   float pidKd {Config::PID_KD};
