@@ -350,6 +350,8 @@ void DisplayManager::drawInfoRow(const RuntimeState& rt, uint32_t remainingSec, 
   char infoBuf[32];
   if (rt.uiMode == UiMode::StageTimeAdjust) {
     snprintf(infoBuf, sizeof(infoBuf), "%s", formatMinutes(rt.activeStageMinutes).c_str());
+  } else if (rt.activeStageMinutes == 0 && (rt.runState == RunState::Running || rt.runState == RunState::Paused)) {
+    snprintf(infoBuf, sizeof(infoBuf), "INF");
   } else {
     snprintf(infoBuf, sizeof(infoBuf), "%s", formatTime(remainingSec).c_str());
   }
