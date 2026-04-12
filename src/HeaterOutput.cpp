@@ -19,7 +19,12 @@ void HeaterOutput::setEnabled(bool enabled) {
 }
 
 void HeaterOutput::setOutputPercent(float percent) {
-  _percent = constrain(percent, 0.0f, 100.0f);
+  _percent = constrain(percent, 0.0f, _maxPercent);
+}
+
+void HeaterOutput::setMaxOutputPercent(float percent) {
+  _maxPercent = constrain(percent, 0.0f, 100.0f);
+  _percent = constrain(_percent, 0.0f, _maxPercent);
 }
 
 void HeaterOutput::update() {
@@ -44,6 +49,7 @@ void HeaterOutput::update() {
 }
 
 float HeaterOutput::getOutputPercent() const { return _percent; }
+float HeaterOutput::getMaxOutputPercent() const { return _maxPercent; }
 bool HeaterOutput::isOn() const { return _outputOn; }
 
 void HeaterOutput::writePin(bool on) {

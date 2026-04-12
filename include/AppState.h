@@ -19,7 +19,18 @@ enum class RunState : uint8_t {
   Running,
   Paused,
   Complete,
-  Fault
+  Fault,
+  AutoTune
+};
+
+enum class AutoTunePhase : uint8_t {
+  Inactive = 0,
+  Stabilizing,
+  Perturbing,
+  Settling,
+  PendingAccept,
+  Complete,
+  Failed
 };
 
 enum class UiMode : uint8_t {
@@ -59,6 +70,13 @@ struct PersistentConfig {
   uint16_t mqttPort {1883};
   char mqttUser[32] {""};
   char mqttPass[32] {""};
+  float pidKp {Config::PID_KP};
+  float pidKi {Config::PID_KI};
+  float pidKd {Config::PID_KD};
+  float prevPidKp {Config::PID_KP};
+  float prevPidKi {Config::PID_KI};
+  float prevPidKd {Config::PID_KD};
+  float tuneQualityScore {0.0f};
   BrewProfile profiles[Config::MAX_PROFILES];
   uint8_t profileCount {0};
   uint8_t activeProfileIndex {0};
@@ -85,6 +103,18 @@ struct RuntimeState {
   uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
   uint32_t stageStartedAtMs {0};
   uint32_t stageHoldStartedAtMs {0};
+
+  AutoTunePhase autoTunePhase {AutoTunePhase::Inactive};
+  float autoTuneRiseTimeSec {0.0f};
+  float autoTuneOvershootC {0.0f};
+  float autoTuneSettlingSec {0.0f};
+  float autoTuneQualityScore {0.0f};
+  float currentKp {Config::PID_KP};
+  float currentKi {Config::PID_KI};
+  float currentKd {Config::PID_KD};
+  float previousKp {Config::PID_KP};
+  float previousKi {Config::PID_KI};
+  float previousKd {Config::PID_KD};
 
   AlarmCode activeAlarm {AlarmCode::None};
   char alarmText[64] {"OK"};

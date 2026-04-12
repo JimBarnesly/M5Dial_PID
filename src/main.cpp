@@ -42,6 +42,169 @@ uint32_t gLastStatusMs = 0, gLastPidMs = 0, gLastMqttServiceMs = 0, gHeatEvalWin
 float gHeatEvalStartTemp = NAN;
 bool gCompletionHandled = false;
 
+struct AutoTuneContext {
+  bool active {false};
+  bool riseCaptured {false};
+  bool settleCaptured {false};
+  bool unstable {false};
+  uint32_t startedAtMs {0};
+  uint32_t perturbStartMs {0};
+  uint32_t settleStartMs {0};
+  uint32_t settledAtMs {0};
+  float baseTempC {NAN};
+  float targetTempC {NAN};
+  float peakTempC {-1000.0f};
+  float candidateKp {0.0f};
+  float candidateKi {0.0f};
+  float candidateKd {0.0f};
+};
+
+AutoTuneContext gAutoTune;
+constexpr float kAutoTuneHeaterMaxPct = 60.0f;
+constexpr float kAutoTuneStepC = 2.0f;
+constexpr uint32_t kAutoTuneMaxPerturbMs = 600000;
+constexpr uint32_t kAutoTuneSettleBandMs = 20000;
+constexpr float kAutoTuneSettleBandC = 0.3f;
+
+static bool finitePositive(float v) {
+  return isfinite(v) && v > 0.0f;
+}
+
+static float computeTuneQuality(float riseSec, float overshootC, float settlingSec, bool unstable) {
+  if (unstable || !isfinite(riseSec) || !isfinite(overshootC) || !isfinite(settlingSec)) return 0.0f;
+  const float risePenalty = min(40.0f, riseSec / 3.0f);
+  const float settlePenalty = min(40.0f, settlingSec / 6.0f);
+  const float overshootPenalty = min(20.0f, max(0.0f, overshootC) * 8.0f);
+  return constrain(100.0f - (risePenalty + settlePenalty + overshootPenalty), 0.0f, 100.0f);
+}
+
+static bool candidateWithinGuardrails(float kp, float ki, float kd) {
+  return finitePositive(kp) && finitePositive(ki) && finitePositive(kd) &&
+         kp <= 60.0f && ki <= 2.0f && kd <= 80.0f;
+}
+
+static void applyTunings(float kp, float ki, float kd) {
+  gPid.setTunings(kp, ki, kd);
+  gPid.reset();
+  gRt.currentKp = kp;
+  gRt.currentKi = ki;
+  gRt.currentKd = kd;
+}
+
+static void failAutoTuneAndRevert() {
+  gAutoTune.active = false;
+  gRt.autoTunePhase = AutoTunePhase::Failed;
+  gRt.runState = RunState::Idle;
+  gHeater.setMaxOutputPercent(100.0f);
+  applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+}
+
+static void startAutoTune() {
+  if (!gRt.sensorHealthy || isnan(gRt.currentTempC)) return;
+  gStages.stop();
+  gCompletionHandled = false;
+  gAutoTune = AutoTuneContext();
+  gAutoTune.active = true;
+  gAutoTune.startedAtMs = millis();
+  gAutoTune.perturbStartMs = gAutoTune.startedAtMs;
+  gAutoTune.baseTempC = gRt.currentTempC;
+  gAutoTune.targetTempC = gAutoTune.baseTempC + kAutoTuneStepC;
+  gAutoTune.peakTempC = gRt.currentTempC;
+  gRt.autoTunePhase = AutoTunePhase::Perturbing;
+  gRt.runState = RunState::AutoTune;
+  gRt.autoTuneRiseTimeSec = 0.0f;
+  gRt.autoTuneOvershootC = 0.0f;
+  gRt.autoTuneSettlingSec = 0.0f;
+  gRt.autoTuneQualityScore = 0.0f;
+  gHeater.setMaxOutputPercent(kAutoTuneHeaterMaxPct);
+}
+
+static void finalizeAutoTuneCandidate() {
+  const float riseSec = gRt.autoTuneRiseTimeSec > 0.0f ? gRt.autoTuneRiseTimeSec : 1.0f;
+  const float settleSec = gRt.autoTuneSettlingSec > 0.0f ? gRt.autoTuneSettlingSec : riseSec * 1.5f;
+  const float overshoot = max(0.0f, gRt.autoTuneOvershootC);
+
+  gAutoTune.candidateKp = constrain(24.0f / riseSec, 2.0f, 45.0f);
+  gAutoTune.candidateKi = constrain(gAutoTune.candidateKp / max(30.0f, settleSec), 0.01f, 1.5f);
+  gAutoTune.candidateKd = constrain(gAutoTune.candidateKp * max(0.15f, overshoot), 0.5f, 60.0f);
+
+  const bool invalidCandidate = !candidateWithinGuardrails(gAutoTune.candidateKp, gAutoTune.candidateKi, gAutoTune.candidateKd);
+  gAutoTune.unstable = gAutoTune.unstable || invalidCandidate || overshoot > 2.5f;
+  gRt.autoTuneQualityScore = computeTuneQuality(riseSec, overshoot, settleSec, gAutoTune.unstable);
+  if (gAutoTune.unstable) {
+    failAutoTuneAndRevert();
+    return;
+  }
+  applyTunings(gAutoTune.candidateKp, gAutoTune.candidateKi, gAutoTune.candidateKd);
+  gRt.autoTunePhase = AutoTunePhase::PendingAccept;
+  gRt.runState = RunState::Idle;
+  gAutoTune.active = false;
+  gHeater.setMaxOutputPercent(100.0f);
+}
+
+static void updateAutoTune() {
+  if (!gAutoTune.active) return;
+  const uint32_t now = millis();
+  const float temp = gRt.currentTempC;
+  if (isnan(temp)) return;
+
+  gAutoTune.peakTempC = max(gAutoTune.peakTempC, temp);
+  gRt.heatingEnabled = true;
+
+  if (gRt.autoTunePhase == AutoTunePhase::Perturbing) {
+    gRt.heaterOutputPct = kAutoTuneHeaterMaxPct;
+    gHeater.setEnabled(true);
+    gHeater.setOutputPercent(gRt.heaterOutputPct);
+
+    const float riseThreshold = gAutoTune.baseTempC + (kAutoTuneStepC * 0.9f);
+    if (!gAutoTune.riseCaptured && temp >= riseThreshold) {
+      gAutoTune.riseCaptured = true;
+      gRt.autoTuneRiseTimeSec = (now - gAutoTune.perturbStartMs) / 1000.0f;
+    }
+    if (temp >= gAutoTune.targetTempC) {
+      gRt.autoTuneOvershootC = max(0.0f, gAutoTune.peakTempC - gAutoTune.targetTempC);
+      gRt.autoTunePhase = AutoTunePhase::Settling;
+      gAutoTune.settleStartMs = now;
+      gAutoTune.settledAtMs = 0;
+      gRt.heaterOutputPct = 0.0f;
+      gHeater.setOutputPercent(0.0f);
+    } else if (now - gAutoTune.perturbStartMs > kAutoTuneMaxPerturbMs) {
+      gAutoTune.unstable = true;
+      failAutoTuneAndRevert();
+    }
+    return;
+  }
+
+  if (gRt.autoTunePhase == AutoTunePhase::Settling) {
+    gRt.heaterOutputPct = 0.0f;
+    gHeater.setEnabled(true);
+    gHeater.setOutputPercent(0.0f);
+    const bool inBand = fabsf(temp - gAutoTune.targetTempC) <= kAutoTuneSettleBandC;
+    if (inBand) {
+      if (gAutoTune.settledAtMs == 0) gAutoTune.settledAtMs = now;
+      if (now - gAutoTune.settledAtMs >= kAutoTuneSettleBandMs) {
+        gAutoTune.settleCaptured = true;
+        gRt.autoTuneSettlingSec = (gAutoTune.settledAtMs - gAutoTune.settleStartMs) / 1000.0f;
+      }
+    } else {
+      gAutoTune.settledAtMs = 0;
+    }
+
+    gRt.autoTuneOvershootC = max(gRt.autoTuneOvershootC, max(0.0f, gAutoTune.peakTempC - gAutoTune.targetTempC));
+    if (gRt.autoTuneOvershootC > 3.0f) {
+      gAutoTune.unstable = true;
+      failAutoTuneAndRevert();
+      return;
+    }
+    if (gAutoTune.settleCaptured || (now - gAutoTune.settleStartMs > 180000)) {
+      if (!gAutoTune.settleCaptured) {
+        gRt.autoTuneSettlingSec = (now - gAutoTune.settleStartMs) / 1000.0f;
+      }
+      finalizeAutoTuneCandidate();
+    }
+  }
+}
+
 static void debugLogBanner() {
   DBG_PRINTLN("\n=== BrewCore HLT V8 debug boot ===");
   DBG_PRINTF("DEBUG_ENABLED=%d WIFI=%d MQTT=%d\n",
@@ -127,6 +290,25 @@ void handleCommands(const char* topic, const char* payload) {
   } else if (t.endsWith("/cmd/reset_alarm")) {
     gAlarm.clearAlarm();
     syncAlarmFromManager();
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/start_autotune")) {
+    startAutoTune();
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/accept_tune")) {
+    if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
+      gCfg.prevPidKp = gCfg.pidKp;
+      gCfg.prevPidKi = gCfg.pidKi;
+      gCfg.prevPidKd = gCfg.pidKd;
+      gCfg.pidKp = gRt.currentKp;
+      gCfg.pidKi = gRt.currentKi;
+      gCfg.pidKd = gRt.currentKd;
+      gCfg.tuneQualityScore = gRt.autoTuneQualityScore;
+      gRt.previousKp = gCfg.prevPidKp;
+      gRt.previousKi = gCfg.prevPidKi;
+      gRt.previousKd = gCfg.prevPidKd;
+      gRt.autoTunePhase = AutoTunePhase::Complete;
+      gStorage.save(gCfg);
+    }
     gDisplay.invalidateAll();
   }
 }
@@ -266,6 +448,11 @@ void updateControl() {
     return;
   }
 
+  if (gRt.runState == RunState::AutoTune) {
+    updateAutoTune();
+    return;
+  }
+
   if (gRt.uiMode == UiMode::SetpointAdjust ||
       gRt.uiMode == UiMode::StageTimeAdjust ||
       gRt.runState == RunState::Idle ||
@@ -314,7 +501,11 @@ void setup() {
   gRt.uiMode = UiMode::SetpointAdjust;
 
   gTempSensor.begin();
-  gPid.begin(Config::PID_KP, Config::PID_KI, Config::PID_KD);
+  applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+  gRt.previousKp = gCfg.prevPidKp;
+  gRt.previousKi = gCfg.prevPidKi;
+  gRt.previousKd = gCfg.prevPidKd;
+  gRt.autoTuneQualityScore = gCfg.tuneQualityScore;
   gHeater.begin();
   gAlarm.begin();
   gStages.begin(&gCfg, &gRt);
