@@ -4,6 +4,7 @@
 class StageManager {
 public:
   void begin(PersistentConfig* cfg, RuntimeState* rt);
+  void start();
   void startProfile(uint8_t index = 0);
   void pause();
   void resume();

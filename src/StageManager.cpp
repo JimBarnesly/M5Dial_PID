@@ -10,6 +10,28 @@ void StageManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   strlcpy(_manualStage.name, "MANUAL STAGE", sizeof(_manualStage.name));
 }
 
+void StageManager::start() {
+  if (!_cfg || !_rt) return;
+
+  if (_cfg->profileCount > 0) {
+    startProfile(_cfg->activeProfileIndex);
+    return;
+  }
+
+  DBG_LOGF("StageManager: start manual target=%.2f holdMin=%lu\n",
+           _cfg->localSetpointC,
+           static_cast<unsigned long>(_cfg->manualStageMinutes));
+
+  _rt->currentStageIndex = 0;
+  _rt->currentSetpointC = _cfg->localSetpointC;
+  _rt->activeStageMinutes = _cfg->manualStageMinutes;
+  _rt->runState = RunState::Running;
+  _rt->uiMode = UiMode::Running;
+  _rt->stageTimerStarted = false;
+  _rt->stageHoldStartedAtMs = 0;
+  _rt->stageStartedAtMs = millis();
+}
+
 void StageManager::startProfile(uint8_t index) {
   if (!_cfg || !_rt) return;
 

@@ -511,7 +511,7 @@ void handleCommands(const char* topic, const char* payload) {
       finishAck();
       return;
     }
-    gStages.startProfile(0);
+    gStages.start();
     gCompletionHandled = false;
     gDisplay.invalidateAll();
     accepted = true;
@@ -632,7 +632,7 @@ void handleButton() {
         gRt.uiMode = UiMode::StageTimeAdjust;
         break;
       case UiMode::StageTimeAdjust:
-        gStages.startProfile(0);
+        gStages.start();
         gCompletionHandled = false;
         break;
       case UiMode::Running:
