@@ -389,9 +389,9 @@ static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = n
   BrewProfile& profile = gCfg.profiles[index];
   strlcpy(profile.name, profileObj["name"] | "PROFILE", sizeof(profile.name));
   profile.stageCount = 0;
-  JsonArray stages = profileObj["stages"].as<JsonArray>();
+  JsonArrayConst stages = profileObj["stages"].as<JsonArrayConst>();
   if (stages.isNull()) return false;
-  for (JsonObject s : stages) {
+  for (JsonObjectConst s : stages) {
     if (profile.stageCount >= Config::MAX_STAGES) break;
     BrewStage& stage = profile.stages[profile.stageCount];
     strlcpy(stage.name, s["name"] | "STAGE", sizeof(stage.name));
