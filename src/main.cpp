@@ -372,7 +372,7 @@ static void persistActivePidAndQuality() {
 }
 
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
-  JsonObject profileObj = doc["profile"].as<JsonObject>();
+  JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
 
   int requestedIndex = profileObj["index"] | -1;
