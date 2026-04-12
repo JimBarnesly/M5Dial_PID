@@ -310,6 +310,22 @@ void handleCommands(const char* topic, const char* payload) {
       gStorage.save(gCfg);
     }
     gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/temp_calibration")) {
+    const float requestedOffset = doc["tempOffsetC"] | atof(payload);
+    const bool hasSmoothing = !doc["tempSmoothingAlpha"].isNull();
+    const bool hasOffset = !doc["tempOffsetC"].isNull();
+
+    gCfg.tempOffsetC = constrain(hasOffset ? requestedOffset : gCfg.tempOffsetC, -10.0f, 10.0f);
+    if (hasSmoothing) {
+      gCfg.tempSmoothingAlpha = constrain(static_cast<float>(doc["tempSmoothingAlpha"]), 0.0f, 1.0f);
+    }
+
+    gTempSensor.setCalibrationOffset(gCfg.tempOffsetC);
+    gTempSensor.setSmoothingFactor(gCfg.tempSmoothingAlpha);
+    gStorage.save(gCfg);
+    if (gRt.mqttConnected) gMqtt.publishCalibrationStatus(gCfg, gRt);
+  } else if (t.endsWith("/cmd/calibration_status")) {
+    if (gRt.mqttConnected) gMqtt.publishCalibrationStatus(gCfg, gRt);
   }
 }
 
@@ -501,6 +517,9 @@ void setup() {
   gRt.uiMode = UiMode::SetpointAdjust;
 
   gTempSensor.begin();
+  gTempSensor.setCalibrationOffset(gCfg.tempOffsetC);
+  gTempSensor.setSmoothingFactor(gCfg.tempSmoothingAlpha);
+  gTempSensor.setPlausibilityLimit(Config::DEFAULT_TEMP_MAX_RATE_C_PER_SEC);
   applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
   gRt.previousKp = gCfg.prevPidKp;
   gRt.previousKi = gCfg.prevPidKi;
@@ -541,6 +560,8 @@ void loop() {
   }
 
   gTempSensor.update();
+  gRt.currentRawTempC = gTempSensor.getRawCelsius();
+  gRt.tempPlausible = gTempSensor.isPlausible();
   if (gTempSensor.hasNewValue()) {
     gRt.currentTempC = gTempSensor.getCelsius();
     DBG_PRINTF("Temp update: %.2fC\n", gRt.currentTempC);

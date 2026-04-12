@@ -78,6 +78,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
 
   JsonDocument doc;
   doc["tempC"] = rt.currentTempC;
+  doc["rawTempC"] = rt.currentRawTempC;
   doc["setpointC"] = rt.currentSetpointC;
   doc["heaterOutputPct"] = rt.heaterOutputPct;
   doc["heaterEnabled"] = rt.heatingEnabled;
@@ -95,6 +96,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["prevPidKi"] = rt.previousKi;
   doc["prevPidKd"] = rt.previousKd;
   doc["sensorHealthy"] = rt.sensorHealthy;
+  doc["tempPlausible"] = rt.tempPlausible;
   doc["wifiConnected"] = rt.wifiConnected;
   doc["mqttConnected"] = rt.mqttConnected;
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
@@ -106,6 +108,24 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   serializeJson(doc, out);
 
   String topic = String(Config::MQTT_TOPIC_BASE) + "/status";
+  _client.publish(topic.c_str(), out.c_str(), true);
+}
+
+void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const RuntimeState& rt) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  doc["tempOffsetC"] = cfg.tempOffsetC;
+  doc["tempSmoothingAlpha"] = cfg.tempSmoothingAlpha;
+  doc["tempC"] = rt.currentTempC;
+  doc["rawTempC"] = rt.currentRawTempC;
+  doc["sensorHealthy"] = rt.sensorHealthy;
+  doc["tempPlausible"] = rt.tempPlausible;
+
+  String out;
+  serializeJson(doc, out);
+
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/status/calibration";
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 

@@ -9,6 +9,7 @@ public:
   void begin(PersistentConfig* cfg, RuntimeState* rt);
   void update();
   void publishStatus(const RuntimeState& rt, const char* activeStageName, uint32_t remainingSec);
+  void publishCalibrationStatus(const PersistentConfig& cfg, const RuntimeState& rt);
   void publishProfileCompleteIfPending(RuntimeState& rt);
   bool isConnected();
 
