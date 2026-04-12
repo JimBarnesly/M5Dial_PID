@@ -11,4 +11,5 @@ public:
 private:
   Preferences _prefs;
   void loadDefaults(PersistentConfig& cfg);
+  bool encryptedStorageAvailable() const;
 };
