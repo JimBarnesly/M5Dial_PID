@@ -608,8 +608,8 @@ void handleTouch() {
   if (!t.wasPressed()) return;
 
   if (gRt.activeAlarm != AlarmCode::None && pointInRect(t.x, t.y, 40, 42, 160, 24)) {
-    DBG_PRINTLN("Touch ack alarm");
-    gAlarm.acknowledge();
+    DBG_PRINTLN("Touch reset alarm");
+    gAlarm.clearAlarm();
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     M5Dial.Speaker.tone(3200, 20);
@@ -665,6 +665,14 @@ void handleButton() {
 void processInput() {
   M5Dial.update();
   handleTouch();
+
+  if (gRt.activeAlarm != AlarmCode::None && gDisplay.wasAlarmPillTouched()) {
+    DBG_PRINTLN("Display alarm-pill reset");
+    gAlarm.clearAlarm();
+    syncAlarmFromManager();
+    gDisplay.invalidateAll();
+    M5Dial.Speaker.tone(3200, 20);
+  }
 
   if (gDisplay.wasSettingsTouched() && gRt.runState != RunState::Running && gRt.runState != RunState::Paused) {
     if (gRt.uiMode == UiMode::SettingsAdjust) leaveSettingsMode();
