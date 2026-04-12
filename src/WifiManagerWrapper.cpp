@@ -9,10 +9,10 @@ void WifiManagerWrapper::buildPortalCredentials() {
   strlcpy(_apPass, Config::WIFI_AP_PASSWORD, sizeof(_apPass));
 }
 
-void WifiManagerWrapper::begin() {
+void WifiManagerWrapper::begin(uint16_t portalTimeoutSec) {
   buildPortalCredentials();
   _wm.setConfigPortalBlocking(false);
-  _wm.setConfigPortalTimeout(180);
+  _wm.setConfigPortalTimeout(portalTimeoutSec);
   _wm.autoConnect(_apName, _apPass);
   _started = true;
 }

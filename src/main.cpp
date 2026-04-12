@@ -257,6 +257,9 @@ static const char* alarmText(AlarmCode code) {
 enum class SettingsField : uint8_t {
   OverTemp = 0,
   ControlLock,
+  MqttTimeoutSec,
+  MqttFallback,
+  WifiPortalTimeoutSec,
   MqttHost,
   MqttPort,
   PidKp,
@@ -299,6 +302,20 @@ static void refreshSettingsUiText() {
       strlcpy(gRt.settingsLabel, "MQTT HOST", sizeof(gRt.settingsLabel));
       snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%s [OCTET %d]", gCfg.mqttHost, gSettingsHostOctet + 1);
       break;
+    case SettingsField::MqttTimeoutSec:
+      strlcpy(gRt.settingsLabel, "MQTT TIMEOUT S", sizeof(gRt.settingsLabel));
+      snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%u", gCfg.mqttCommsTimeoutSec);
+      break;
+    case SettingsField::MqttFallback:
+      strlcpy(gRt.settingsLabel, "MQTT FALLBACK", sizeof(gRt.settingsLabel));
+      if (gCfg.mqttFallbackMode == MqttFallbackMode::HoldSetpoint) strlcpy(gRt.settingsValue, "HOLD", sizeof(gRt.settingsValue));
+      else if (gCfg.mqttFallbackMode == MqttFallbackMode::Pause) strlcpy(gRt.settingsValue, "PAUSE", sizeof(gRt.settingsValue));
+      else strlcpy(gRt.settingsValue, "STOP HEATER", sizeof(gRt.settingsValue));
+      break;
+    case SettingsField::WifiPortalTimeoutSec:
+      strlcpy(gRt.settingsLabel, "PORTAL TIMEOUT", sizeof(gRt.settingsLabel));
+      snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%us", gCfg.wifiPortalTimeoutSec);
+      break;
     case SettingsField::MqttPort:
       strlcpy(gRt.settingsLabel, "MQTT PORT", sizeof(gRt.settingsLabel));
       snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%u", gCfg.mqttPort);
@@ -331,6 +348,64 @@ static void leaveSettingsMode() {
   gRt.uiMode = UiMode::SetpointAdjust;
   gRt.settingsLabel[0] = '\0';
   gRt.settingsValue[0] = '\0';
+}
+
+static void logRuntimeEvent(const char* text) {
+  if (!text || text[0] == '\0') return;
+  RuntimeEvent& ev = gRt.eventLog[gRt.eventLogHead];
+  ev.atMs = millis();
+  strlcpy(ev.text, text, sizeof(ev.text));
+  gRt.eventLogHead = (gRt.eventLogHead + 1) % Config::EVENT_LOG_CAPACITY;
+  if (gRt.eventLogCount < Config::EVENT_LOG_CAPACITY) ++gRt.eventLogCount;
+  gRt.pendingEventLogPublish = true;
+}
+
+static void persistActivePidAndQuality() {
+  gCfg.pidKp = gRt.currentKp;
+  gCfg.pidKi = gRt.currentKi;
+  gCfg.pidKd = gRt.currentKd;
+  gCfg.prevPidKp = gRt.previousKp;
+  gCfg.prevPidKi = gRt.previousKi;
+  gCfg.prevPidKd = gRt.previousKd;
+  gCfg.tuneQualityScore = gRt.autoTuneQualityScore;
+  gStorage.save(gCfg);
+}
+
+static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
+  JsonObject profileObj = doc["profile"].as<JsonObject>();
+  if (profileObj.isNull()) return false;
+
+  int requestedIndex = profileObj["index"] | -1;
+  uint8_t index = 0;
+  if (requestedIndex >= 0) {
+    if (requestedIndex >= Config::MAX_PROFILES) return false;
+    index = static_cast<uint8_t>(requestedIndex);
+    if (index >= gCfg.profileCount) gCfg.profileCount = index + 1;
+  } else {
+    if (gCfg.profileCount >= Config::MAX_PROFILES) return false;
+    index = gCfg.profileCount++;
+  }
+
+  BrewProfile& profile = gCfg.profiles[index];
+  strlcpy(profile.name, profileObj["name"] | "PROFILE", sizeof(profile.name));
+  profile.stageCount = 0;
+  JsonArray stages = profileObj["stages"].as<JsonArray>();
+  if (stages.isNull()) return false;
+  for (JsonObject s : stages) {
+    if (profile.stageCount >= Config::MAX_STAGES) break;
+    BrewStage& stage = profile.stages[profile.stageCount];
+    strlcpy(stage.name, s["name"] | "STAGE", sizeof(stage.name));
+    const float target = s["targetC"] | NAN;
+    const uint32_t hold = s["holdSeconds"] | 0UL;
+    if (!isfinite(target) || target < 20.0f || target > 120.0f) continue;
+    stage.targetC = target;
+    stage.holdSeconds = hold;
+    ++profile.stageCount;
+  }
+  if (profile.stageCount == 0) return false;
+  if (gCfg.activeProfileIndex >= gCfg.profileCount) gCfg.activeProfileIndex = 0;
+  if (outIndex) *outIndex = index;
+  return true;
 }
 
 void syncAlarmFromManager() {
@@ -443,6 +518,31 @@ void handleCommands(const char* topic, const char* payload) {
       if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
       gDisplay.invalidateAll();
     }
+  } else if (t.endsWith("/cmd/mqtt_timeout")) {
+    const int timeout = doc["seconds"] | atoi(payload);
+    if (timeout >= 0 && timeout <= 3600) {
+      gCfg.mqttCommsTimeoutSec = static_cast<uint16_t>(timeout);
+      gStorage.save(gCfg);
+      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+      gDisplay.invalidateAll();
+    }
+  } else if (t.endsWith("/cmd/mqtt_fallback")) {
+    int mode = doc["mode"] | atoi(payload);
+    if (mode >= static_cast<int>(MqttFallbackMode::HoldSetpoint) &&
+        mode <= static_cast<int>(MqttFallbackMode::StopHeater)) {
+      gCfg.mqttFallbackMode = static_cast<MqttFallbackMode>(mode);
+      gStorage.save(gCfg);
+      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+      gDisplay.invalidateAll();
+    }
+  } else if (t.endsWith("/cmd/wifi_portal_timeout")) {
+    const int timeout = doc["seconds"] | atoi(payload);
+    if (timeout >= 30 && timeout <= 1800) {
+      gCfg.wifiPortalTimeoutSec = static_cast<uint16_t>(timeout);
+      gStorage.save(gCfg);
+      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+      gDisplay.invalidateAll();
+    }
   } else if (t.endsWith("/cmd/pid")) {
     const float kp = doc["kp"] | gCfg.pidKp;
     const float ki = doc["ki"] | gCfg.pidKi;
@@ -484,7 +584,76 @@ void handleCommands(const char* topic, const char* payload) {
       gDisplay.invalidateAll();
     }
   } else if (t.endsWith("/cmd/get_config")) {
+    command = "get_config";
+    accepted = true;
     if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+  } else if (t.endsWith("/cmd/get_events")) {
+    command = "get_events";
+    accepted = true;
+    if (gRt.mqttConnected) gMqtt.publishEventLog(gRt);
+  } else if (t.endsWith("/cmd/profile_select")) {
+    command = "profile_select";
+    accepted = true;
+    const int index = doc["index"] | -1;
+    if (index < 0 || index >= gCfg.profileCount) {
+      applied = false;
+      reason = "invalid_profile_index";
+      finishAck();
+      return;
+    }
+    gCfg.activeProfileIndex = static_cast<uint8_t>(index);
+    gStorage.save(gCfg);
+    logRuntimeEvent("Profile selected");
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/profile_start")) {
+    command = "profile_start";
+    accepted = true;
+    const int index = doc["index"] | static_cast<int>(gCfg.activeProfileIndex);
+    if (index < 0 || index >= gCfg.profileCount) {
+      applied = false;
+      reason = "invalid_profile_index";
+      finishAck();
+      return;
+    }
+    gCfg.activeProfileIndex = static_cast<uint8_t>(index);
+    gStages.startProfile(gCfg.activeProfileIndex);
+    gCompletionHandled = false;
+    logRuntimeEvent("Profile run started");
+    gStorage.save(gCfg);
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/profile_delete")) {
+    command = "profile_delete";
+    accepted = true;
+    const int index = doc["index"] | -1;
+    if (index < 0 || index >= gCfg.profileCount) {
+      applied = false;
+      reason = "invalid_profile_index";
+      finishAck();
+      return;
+    }
+    for (int i = index; i < gCfg.profileCount - 1; ++i) {
+      gCfg.profiles[i] = gCfg.profiles[i + 1];
+    }
+    if (gCfg.profileCount > 0) --gCfg.profileCount;
+    if (gCfg.profileCount == 0) gCfg.activeProfileIndex = 0;
+    else if (gCfg.activeProfileIndex >= gCfg.profileCount) gCfg.activeProfileIndex = gCfg.profileCount - 1;
+    gStorage.save(gCfg);
+    logRuntimeEvent("Profile deleted");
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/profile_upsert")) {
+    command = "profile_upsert";
+    accepted = true;
+    uint8_t outIndex = 0;
+    if (!upsertProfileFromJson(doc, &outIndex)) {
+      applied = false;
+      reason = "invalid_profile_payload";
+      finishAck();
+      return;
+    }
+    gStorage.save(gCfg);
+    if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+    logRuntimeEvent("Profile upserted");
+    gDisplay.invalidateAll();
   } else if (t.endsWith("/cmd/minutes")) {
     command = "minutes";
     int32_t mins = doc["minutes"] | atoi(payload);
@@ -513,6 +682,7 @@ void handleCommands(const char* topic, const char* payload) {
     }
     gStages.start();
     gCompletionHandled = false;
+    logRuntimeEvent("Run started");
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/pause")) {
@@ -526,6 +696,7 @@ void handleCommands(const char* topic, const char* payload) {
       return;
     }
     gStages.pause();
+    logRuntimeEvent("Run paused");
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/stop")) {
@@ -540,6 +711,7 @@ void handleCommands(const char* topic, const char* payload) {
     }
     gStages.stop();
     gCompletionHandled = false;
+    logRuntimeEvent("Run stopped");
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/reset_alarm")) {
@@ -547,6 +719,7 @@ void handleCommands(const char* topic, const char* payload) {
     accepted = true;
     gAlarm.clearAlarm();
     syncAlarmFromManager();
+    logRuntimeEvent("Alarm reset");
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/start_autotune")) {
@@ -559,6 +732,7 @@ void handleCommands(const char* topic, const char* payload) {
       return;
     }
     startAutoTune();
+    logRuntimeEvent("Autotune started");
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/accept_tune")) {
@@ -570,6 +744,27 @@ void handleCommands(const char* topic, const char* payload) {
       finishAck();
       return;
     }
+    gRt.previousKp = gCfg.pidKp;
+    gRt.previousKi = gCfg.pidKi;
+    gRt.previousKd = gCfg.pidKd;
+    persistActivePidAndQuality();
+    gRt.autoTunePhase = AutoTunePhase::Complete;
+    logRuntimeEvent("Autotune accepted");
+    if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/reject_tune")) {
+    command = "reject_tune";
+    accepted = true;
+    if (gRt.autoTunePhase != AutoTunePhase::PendingAccept) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
+    applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+    gRt.autoTunePhase = AutoTunePhase::Failed;
+    gRt.autoTuneQualityScore = 0.0f;
+    logRuntimeEvent("Autotune rejected");
     gDisplay.invalidateAll();
   } else if (t.endsWith("/cmd/temp_calibration")) {
     const float requestedOffset = doc["tempOffsetC"] | atof(payload);
@@ -619,6 +814,17 @@ void handleTouch() {
 void handleButton() {
   if (M5Dial.BtnA.wasClicked()) {
     DBG_PRINTLN("Button clicked");
+    if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
+      gRt.previousKp = gCfg.pidKp;
+      gRt.previousKi = gCfg.pidKi;
+      gRt.previousKd = gCfg.pidKd;
+      persistActivePidAndQuality();
+      gRt.autoTunePhase = AutoTunePhase::Complete;
+      logRuntimeEvent("Autotune accepted (local)");
+      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+      gDisplay.invalidateAll();
+      return;
+    }
     if (gRt.uiMode == UiMode::SettingsAdjust) {
       gSettingsField = static_cast<SettingsField>((static_cast<uint8_t>(gSettingsField) + 1) %
                                                   static_cast<uint8_t>(SettingsField::Count));
@@ -649,6 +855,15 @@ void handleButton() {
 
   if (M5Dial.BtnA.wasHold()) {
     DBG_PRINTLN("Button hold stop");
+    if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
+      applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+      gRt.autoTunePhase = AutoTunePhase::Failed;
+      gRt.autoTuneQualityScore = 0.0f;
+      logRuntimeEvent("Autotune rejected (local)");
+      gDisplay.invalidateAll();
+      M5Dial.Speaker.tone(2200, 80);
+      return;
+    }
     if (gRt.uiMode == UiMode::SettingsAdjust) {
       leaveSettingsMode();
       gDisplay.invalidateAll();
@@ -715,6 +930,20 @@ void processInput() {
       while (lock > 2) lock -= 3;
       gCfg.controlLock = static_cast<ControlLock>(lock);
       changed = true;
+    } else if (gSettingsField == SettingsField::MqttTimeoutSec) {
+      int nextTimeout = static_cast<int>(gCfg.mqttCommsTimeoutSec) + static_cast<int>(diff);
+      gCfg.mqttCommsTimeoutSec = static_cast<uint16_t>(constrain(nextTimeout, 0, 3600));
+      changed = true;
+    } else if (gSettingsField == SettingsField::MqttFallback) {
+      int nextMode = static_cast<int>(gCfg.mqttFallbackMode) + (diff > 0 ? 1 : -1);
+      while (nextMode < static_cast<int>(MqttFallbackMode::HoldSetpoint)) nextMode += 3;
+      while (nextMode > static_cast<int>(MqttFallbackMode::StopHeater)) nextMode -= 3;
+      gCfg.mqttFallbackMode = static_cast<MqttFallbackMode>(nextMode);
+      changed = true;
+    } else if (gSettingsField == SettingsField::WifiPortalTimeoutSec) {
+      int nextTimeout = static_cast<int>(gCfg.wifiPortalTimeoutSec) + static_cast<int>(diff * 5);
+      gCfg.wifiPortalTimeoutSec = static_cast<uint16_t>(constrain(nextTimeout, 30, 1800));
+      changed = true;
     } else if (gSettingsField == SettingsField::MqttHost) {
       int octets[4] = {192, 168, 1, 10};
       parseIpv4(gCfg.mqttHost, octets);
@@ -762,10 +991,12 @@ void updateSafety() {
   if (!gRt.sensorHealthy) {
     DBG_PRINTLN("Alarm: Sensor fault");
     gAlarm.setAlarm(AlarmCode::SensorFault, alarmText(AlarmCode::SensorFault));
+    logRuntimeEvent("Alarm: Sensor fault");
     gRt.runState = RunState::Fault;
   } else if (gRt.currentTempC >= gCfg.overTempC) {
     DBG_PRINTLN("Alarm: Over temp");
     gAlarm.setAlarm(AlarmCode::OverTemp, alarmText(AlarmCode::OverTemp));
+    logRuntimeEvent("Alarm: Over temp");
     gRt.runState = RunState::Fault;
   } else {
     clearFaultIfRecoverable();
@@ -783,6 +1014,7 @@ void updateSafety() {
       if (gRt.currentTempC < gHeatEvalStartTemp + Config::MIN_EXPECTED_RISE_C) {
         DBG_PRINTLN("Alarm: Heating ineffective");
         gAlarm.setAlarm(AlarmCode::HeatingIneffective, alarmText(AlarmCode::HeatingIneffective));
+        logRuntimeEvent("Alarm: Heating ineffective");
         gRt.runState = RunState::Fault;
       }
       gHeatEvalWindowStart = millis();
@@ -883,7 +1115,7 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
-    gWifi.begin();
+    gWifi.begin(gCfg.wifiPortalTimeoutSec);
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
@@ -901,6 +1133,7 @@ void setup() {
   }
 
   gDisplay.invalidateAll();
+  logRuntimeEvent("System booted");
   debugPrintState("setup");
 }
 
@@ -933,6 +1166,7 @@ void loop() {
   if (remoteCommsTimedOut(now) && gAlarm.getAlarm() != AlarmCode::MqttOffline) {
     gAlarm.setAlarm(AlarmCode::MqttOffline, alarmText(AlarmCode::MqttOffline));
     applyMqttTimeoutFallback();
+    logRuntimeEvent("Alarm: MQTT offline timeout");
     syncAlarmFromManager();
     gPendingAlarmStatusPublish = true;
     gDisplay.invalidateAll();
@@ -955,6 +1189,7 @@ void loop() {
       DBG_PRINTLN("Stage complete");
       gAlarm.notifyStageComplete();
       gRt.pendingProfileCompletePublish = true;
+      logRuntimeEvent("Run complete");
       gCompletionHandled = true;
       gDisplay.invalidateAll();
     }
@@ -975,6 +1210,11 @@ void loop() {
   if (gPendingAlarmStatusPublish && gRt.mqttConnected) {
     gMqtt.publishStatus(gRt, stage ? stage->name : "", remaining);
     gPendingAlarmStatusPublish = false;
+  }
+
+  if (gRt.pendingEventLogPublish && gRt.mqttConnected) {
+    gMqtt.publishEventLog(gRt);
+    gRt.pendingEventLogPublish = false;
   }
 
   static uint32_t lastDebugStateMs = 0;

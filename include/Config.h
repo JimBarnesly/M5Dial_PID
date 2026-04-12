@@ -26,6 +26,7 @@ constexpr float PID_KD = 20.0f;
 constexpr uint32_t TEMP_SAMPLE_MS = 1000;
 constexpr uint32_t MQTT_RECONNECT_MS = 5000;
 constexpr uint32_t DEFAULT_MQTT_COMMS_TIMEOUT_SEC = 30;
+constexpr uint16_t DEFAULT_WIFI_PORTAL_TIMEOUT_SEC = 180;
 constexpr uint32_t STATUS_PUBLISH_MS = 2000;
 constexpr uint32_t HOLD_COMPLETE_BEEP_MS = 1800;
 constexpr uint32_t ALARM_BEEP_MS = 700;
@@ -41,6 +42,7 @@ constexpr uint32_t UI_FORCE_REFRESH_MS = 30000;
 
 constexpr uint8_t MAX_STAGES = 8;
 constexpr uint8_t MAX_PROFILES = 6;
+constexpr uint8_t EVENT_LOG_CAPACITY = 24;
 
 constexpr char WIFI_AP_NAME_PREFIX[] = "BrewCore-HLT-";
 constexpr char WIFI_AP_PASSWORD[] = "BrewCore12";

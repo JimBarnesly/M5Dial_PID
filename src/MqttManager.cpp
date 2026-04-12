@@ -220,6 +220,11 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["overTempC"] = cfg.overTempC;
   doc["mqttHost"] = cfg.mqttHost;
   doc["mqttPort"] = cfg.mqttPort;
+  doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
+  doc["mqttFallbackMode"] = static_cast<uint8_t>(cfg.mqttFallbackMode);
+  doc["wifiPortalTimeoutSec"] = cfg.wifiPortalTimeoutSec;
+  doc["profileCount"] = cfg.profileCount;
+  doc["activeProfileIndex"] = cfg.activeProfileIndex;
   doc["pidKp"] = cfg.pidKp;
   doc["pidKi"] = cfg.pidKi;
   doc["pidKd"] = cfg.pidKd;
@@ -233,6 +238,27 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
 
   String topic = String(Config::MQTT_TOPIC_BASE) + "/config/effective";
   _client.publish(topic.c_str(), out.c_str(), true);
+}
+
+void MqttManager::publishEventLog(const RuntimeState& rt) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  JsonArray events = doc["events"].to<JsonArray>();
+  const uint8_t count = rt.eventLogCount > Config::EVENT_LOG_CAPACITY ? Config::EVENT_LOG_CAPACITY : rt.eventLogCount;
+  const uint8_t start = (rt.eventLogHead + Config::EVENT_LOG_CAPACITY - count) % Config::EVENT_LOG_CAPACITY;
+  for (uint8_t i = 0; i < count; ++i) {
+    const RuntimeEvent& ev = rt.eventLog[(start + i) % Config::EVENT_LOG_CAPACITY];
+    JsonObject item = events.add<JsonObject>();
+    item["atMs"] = ev.atMs;
+    item["text"] = ev.text;
+  }
+  doc["count"] = count;
+
+  String out;
+  serializeJson(doc, out);
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/event/log";
+  _client.publish(topic.c_str(), out.c_str(), false);
 }
 
 bool MqttManager::isConnected() {

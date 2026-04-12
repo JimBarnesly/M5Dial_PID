@@ -67,6 +67,11 @@ struct BrewProfile {
   BrewStage stages[Config::MAX_STAGES];
 };
 
+struct RuntimeEvent {
+  uint32_t atMs {0};
+  char text[48] {""};
+};
+
 struct PersistentConfig {
   ControlLock controlLock {ControlLock::LocalOrRemote};
   float localSetpointC {Config::DEFAULT_SETPOINT_C};
@@ -85,6 +90,7 @@ struct PersistentConfig {
   char mqttTlsCaCert[768] {""};      // PEM
   uint16_t mqttCommsTimeoutSec {0};
   MqttFallbackMode mqttFallbackMode {MqttFallbackMode::HoldSetpoint};
+  uint16_t wifiPortalTimeoutSec {Config::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC};
   float pidKp {Config::PID_KP};
   float pidKi {Config::PID_KI};
   float pidKd {Config::PID_KD};
@@ -142,4 +148,8 @@ struct RuntimeState {
   char alarmText[64] {"OK"};
   char settingsLabel[24] {""};
   char settingsValue[48] {""};
+  RuntimeEvent eventLog[Config::EVENT_LOG_CAPACITY];
+  uint8_t eventLogHead {0};
+  uint8_t eventLogCount {0};
+  bool pendingEventLogPublish {false};
 };

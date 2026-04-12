@@ -3,7 +3,7 @@
 
 class WifiManagerWrapper {
 public:
-  void begin();
+  void begin(uint16_t portalTimeoutSec = 180);
   void update();
   bool isConnected() const;
   const char* getPortalApName() const;
