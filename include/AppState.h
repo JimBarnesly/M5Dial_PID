@@ -14,6 +14,12 @@ enum class ControlMode : uint8_t {
   Remote
 };
 
+enum class MqttFallbackMode : uint8_t {
+  HoldSetpoint = 0,
+  Pause,
+  StopHeater
+};
+
 enum class RunState : uint8_t {
   Idle = 0,
   Running,
@@ -70,6 +76,8 @@ struct PersistentConfig {
   uint16_t mqttPort {1883};
   char mqttUser[32] {""};
   char mqttPass[32] {""};
+  uint32_t mqttCommsTimeoutSec {Config::DEFAULT_MQTT_COMMS_TIMEOUT_SEC};
+  MqttFallbackMode mqttFallbackMode {MqttFallbackMode::HoldSetpoint};
   float pidKp {Config::PID_KP};
   float pidKi {Config::PID_KI};
   float pidKd {Config::PID_KD};
@@ -98,6 +106,8 @@ struct RuntimeState {
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};
   bool heatOn {false};
+  uint32_t lastValidMqttConnectionAtMs {0};
+  uint32_t lastAcceptedRemoteCommandAtMs {0};
 
   uint8_t currentStageIndex {0};
   uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
