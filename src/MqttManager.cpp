@@ -5,12 +5,27 @@
 #include <functional>
 
 MqttManager::MqttManager() : _client(_wifiClient) {}
+namespace {
+const char* runStateText(RunState runState) {
+  switch (runState) {
+    case RunState::Idle: return "idle";
+    case RunState::Running: return "running";
+    case RunState::Paused: return "paused";
+    case RunState::Complete: return "complete";
+    case RunState::Fault: return "fault";
+    case RunState::AutoTune: return "autotune";
+    default: return "unknown";
+  }
+}
+}
 
 void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _cfg = cfg;
   _rt = rt;
+  _transportClient = &_wifiClient;
   _client.setBufferSize(1024);
-  _client.setServer(cfg->mqttHost, cfg->mqttPort);
+  configureClientForSecurity(true);
+  _client.setServer(cfg->mqttHost, effectivePort());
   _client.setCallback([this](char* topic, byte* payload, unsigned int length) {
     this->handleMessage(topic, payload, length);
   });
@@ -23,7 +38,8 @@ void MqttManager::setCommandCallback(CommandCallback cb) {
 void MqttManager::update() {
   if (!_cfg || !_rt) return;
 
-  _client.setServer(_cfg->mqttHost, _cfg->mqttPort);
+  configureClientForSecurity();
+  _client.setServer(_cfg->mqttHost, effectivePort());
 
   if (!_rt->wifiConnected) {
     _rt->mqttConnected = false;
@@ -34,6 +50,7 @@ void MqttManager::update() {
     // MQTT loop servicing
     _client.loop();
     _rt->mqttConnected = true;
+    _rt->lastValidMqttConnectionAtMs = millis();
     return;
   }
 
@@ -53,8 +70,9 @@ void MqttManager::tryReconnect() {
   }
 
   if (ok) {
-    DBG_LOGLN("MQTT connected");
+    DBG_LOGF("MQTT connected (%s:%u tls=%d)\n", _cfg->mqttHost, effectivePort(), _cfg->mqttUseTls);
     subscribeTopics();
+    _rt->lastValidMqttConnectionAtMs = millis();
   } else {
     DBG_LOGLN("MQTT reconnect failed");
   }
@@ -99,6 +117,8 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["tempPlausible"] = rt.tempPlausible;
   doc["wifiConnected"] = rt.wifiConnected;
   doc["mqttConnected"] = rt.mqttConnected;
+  doc["lastValidMqttConnectionAtMs"] = rt.lastValidMqttConnectionAtMs;
+  doc["lastAcceptedRemoteCommandAtMs"] = rt.lastAcceptedRemoteCommandAtMs;
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
   doc["alarmText"] = rt.alarmText;
   doc["activeStage"] = activeStageName ? activeStageName : "";
@@ -109,6 +129,57 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
 
   String topic = String(Config::MQTT_TOPIC_BASE) + "/status";
   _client.publish(topic.c_str(), out.c_str(), true);
+  publishShadow(rt, remainingSec);
+}
+
+void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  JsonObject desired = doc["desired"].to<JsonObject>();
+  desired["setpointC"] = rt.desiredSetpointC;
+  desired["minutes"] = rt.desiredMinutes;
+  desired["runAction"] = rt.desiredRunAction;
+
+  JsonObject reported = doc["reported"].to<JsonObject>();
+  reported["runState"] = runStateText(rt.runState);
+  reported["setpointC"] = rt.currentSetpointC;
+  reported["effectiveTimerSec"] = remainingSec;
+  reported["stageTimerStarted"] = rt.stageTimerStarted;
+
+  String out;
+  serializeJson(doc, out);
+
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/shadow";
+  _client.publish(topic.c_str(), out.c_str(), true);
+}
+
+void MqttManager::publishCommandAck(const char* cmdId,
+                                    const char* command,
+                                    bool accepted,
+                                    bool applied,
+                                    const char* reason,
+                                    const RuntimeState& rt,
+                                    uint32_t remainingSec) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  doc["cmdId"] = (cmdId && cmdId[0] != '\0') ? cmdId : "none";
+  doc["command"] = command ? command : "";
+  doc["accepted"] = accepted;
+  doc["applied"] = applied;
+  doc["reason"] = reason ? reason : "";
+
+  JsonObject reported = doc["reported"].to<JsonObject>();
+  reported["runState"] = runStateText(rt.runState);
+  reported["setpointC"] = rt.currentSetpointC;
+  reported["effectiveTimerSec"] = remainingSec;
+
+  String out;
+  serializeJson(doc, out);
+
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/event/cmd_ack";
+  _client.publish(topic.c_str(), out.c_str(), false);
 }
 
 void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const RuntimeState& rt) {
@@ -138,4 +209,36 @@ void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
 
 bool MqttManager::isConnected() {
   return _client.connected();
+}
+
+uint16_t MqttManager::effectivePort() const {
+  if (!_cfg) return Config::MQTT_PORT_PLAIN;
+  if (_cfg->mqttUseTls && _cfg->mqttPort == Config::MQTT_PORT_PLAIN) return Config::MQTT_PORT_TLS;
+  return _cfg->mqttPort;
+}
+
+void MqttManager::configureClientForSecurity(bool force) {
+  if (!_cfg) return;
+
+  const bool tlsEnabled = _cfg->mqttUseTls;
+  const uint16_t desiredPort = effectivePort();
+  if (!force && tlsEnabled == _lastTlsEnabled && desiredPort == _lastPort) return;
+
+  if (tlsEnabled) {
+    _transportClient = &_wifiSecureClient;
+    _wifiSecureClient.setHandshakeTimeout(15);
+    if (_cfg->mqttTlsAuthMode == 1 && strlen(_cfg->mqttTlsFingerprint) > 0) {
+      _wifiSecureClient.setFingerprint(_cfg->mqttTlsFingerprint);
+    } else if (_cfg->mqttTlsAuthMode == 2 && strlen(_cfg->mqttTlsCaCert) > 0) {
+      _wifiSecureClient.setCACert(_cfg->mqttTlsCaCert);
+    } else {
+      _wifiSecureClient.setInsecure();
+    }
+  } else {
+    _transportClient = &_wifiClient;
+  }
+
+  _client.setClient(*_transportClient);
+  _lastTlsEnabled = tlsEnabled;
+  _lastPort = desiredPort;
 }

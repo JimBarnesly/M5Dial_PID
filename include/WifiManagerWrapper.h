@@ -6,8 +6,13 @@ public:
   void begin();
   void update();
   bool isConnected() const;
+  const char* getPortalApName() const;
+  const char* getPortalApPassword() const;
 
 private:
+  void buildPortalCredentials();
   WiFiManager _wm;
   bool _started {false};
+  char _apName[32] {};
+  char _apPass[20] {};
 };

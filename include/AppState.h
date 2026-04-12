@@ -14,6 +14,12 @@ enum class ControlMode : uint8_t {
   Remote
 };
 
+enum class MqttFallbackMode : uint8_t {
+  HoldSetpoint = 0,
+  Pause,
+  StopHeater
+};
+
 enum class RunState : uint8_t {
   Idle = 0,
   Running,
@@ -69,9 +75,13 @@ struct PersistentConfig {
   float tempOffsetC {0.0f};
   float tempSmoothingAlpha {Config::DEFAULT_TEMP_SMOOTHING_ALPHA};
   char mqttHost[64] {"192.168.1.10"};
-  uint16_t mqttPort {1883};
+  uint16_t mqttPort {Config::MQTT_PORT_PLAIN};
   char mqttUser[32] {""};
   char mqttPass[32] {""};
+  bool mqttUseTls {false};
+  uint8_t mqttTlsAuthMode {0};  // 0=none, 1=fingerprint pin, 2=CA cert pin
+  char mqttTlsFingerprint[96] {""};  // e.g. AA:BB:...
+  char mqttTlsCaCert[768] {""};      // PEM
   float pidKp {Config::PID_KP};
   float pidKi {Config::PID_KI};
   float pidKd {Config::PID_KD};
@@ -102,9 +112,14 @@ struct RuntimeState {
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};
   bool heatOn {false};
+  uint32_t lastValidMqttConnectionAtMs {0};
+  uint32_t lastAcceptedRemoteCommandAtMs {0};
 
   uint8_t currentStageIndex {0};
   uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
+  float desiredSetpointC {Config::DEFAULT_SETPOINT_C};
+  uint32_t desiredMinutes {Config::DEFAULT_STAGE_MINUTES};
+  char desiredRunAction[16] {"stop"};
   uint32_t stageStartedAtMs {0};
   uint32_t stageHoldStartedAtMs {0};
 
