@@ -88,6 +88,7 @@ const BrewStage* StageManager::getCurrentStage() const {
 uint32_t StageManager::getRemainingSeconds() const {
   if (!_rt) return 0;
   const uint32_t totalSec = _rt->activeStageMinutes * 60UL;
+  if (totalSec == 0) return 0;
   if (!_rt->stageTimerStarted) return totalSec;
   const uint32_t elapsed = (millis() - _rt->stageHoldStartedAtMs) / 1000UL;
   return (elapsed >= totalSec) ? 0 : (totalSec - elapsed);
@@ -95,6 +96,14 @@ uint32_t StageManager::getRemainingSeconds() const {
 
 void StageManager::update(float currentTempC) {
   if (!_cfg || !_rt || _rt->runState != RunState::Running) return;
+
+  const uint32_t totalSec = _rt->activeStageMinutes * 60UL;
+  if (totalSec == 0) {
+    // Timer value of 0 means "hold indefinitely" (no auto-complete).
+    _rt->stageTimerStarted = false;
+    _rt->stageHoldStartedAtMs = 0;
+    return;
+  }
 
   const float targetC = _rt->currentSetpointC;
   if (!_rt->stageTimerStarted && !isnan(currentTempC) && currentTempC >= targetC) {
@@ -104,7 +113,6 @@ void StageManager::update(float currentTempC) {
   }
 
   if (_rt->stageTimerStarted) {
-    const uint32_t totalSec = _rt->activeStageMinutes * 60UL;
     const uint32_t elapsedSec = (millis() - _rt->stageHoldStartedAtMs) / 1000UL;
     if (elapsedSec >= totalSec) {
       DBG_LOGLN("StageManager: manual stage complete");

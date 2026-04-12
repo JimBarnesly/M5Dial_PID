@@ -14,6 +14,7 @@ Key changes in V3:
 Current UX behaviour:
 - Center button toggles setpoint edit mode.
 - Encoder changes setpoint instantly while in edit mode.
+- Stage timer can be set to `0m` for indefinite temperature regulation (no auto-complete).
 - Main background is static after boot.
 - Current temp updates slowly by design.
 - Time remaining and power update without full-screen flicker.

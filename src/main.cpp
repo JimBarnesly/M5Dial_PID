@@ -106,7 +106,10 @@ void handleCommands(const char* topic, const char* payload) {
       gDisplay.invalidateAll();
     }
   } else if (t.endsWith("/cmd/minutes")) {
-    gCfg.manualStageMinutes = max<uint32_t>(1, doc["minutes"] | atoi(payload));
+    int32_t mins = doc["minutes"] | atoi(payload);
+    if (mins < 0) mins = 0;
+    if (mins > 480) mins = 480;
+    gCfg.manualStageMinutes = static_cast<uint32_t>(mins);
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
     gStorage.save(gCfg);
     gDisplay.invalidateAll();
@@ -196,7 +199,7 @@ void processInput() {
     }
   } else if (gRt.uiMode == UiMode::StageTimeAdjust) {
     int32_t mins = static_cast<int32_t>(gCfg.manualStageMinutes) + diff;
-    if (mins < 1) mins = 1;
+    if (mins < 0) mins = 0;
     if (mins > 480) mins = 480;
     gCfg.manualStageMinutes = static_cast<uint32_t>(mins);
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
