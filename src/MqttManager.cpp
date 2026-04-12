@@ -5,6 +5,19 @@
 #include <functional>
 
 MqttManager::MqttManager() : _client(_wifiClient) {}
+namespace {
+const char* runStateText(RunState runState) {
+  switch (runState) {
+    case RunState::Idle: return "idle";
+    case RunState::Running: return "running";
+    case RunState::Paused: return "paused";
+    case RunState::Complete: return "complete";
+    case RunState::Fault: return "fault";
+    case RunState::AutoTune: return "autotune";
+    default: return "unknown";
+  }
+}
+}
 
 void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _cfg = cfg;
@@ -107,6 +120,57 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
 
   String topic = String(Config::MQTT_TOPIC_BASE) + "/status";
   _client.publish(topic.c_str(), out.c_str(), true);
+  publishShadow(rt, remainingSec);
+}
+
+void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  JsonObject desired = doc["desired"].to<JsonObject>();
+  desired["setpointC"] = rt.desiredSetpointC;
+  desired["minutes"] = rt.desiredMinutes;
+  desired["runAction"] = rt.desiredRunAction;
+
+  JsonObject reported = doc["reported"].to<JsonObject>();
+  reported["runState"] = runStateText(rt.runState);
+  reported["setpointC"] = rt.currentSetpointC;
+  reported["effectiveTimerSec"] = remainingSec;
+  reported["stageTimerStarted"] = rt.stageTimerStarted;
+
+  String out;
+  serializeJson(doc, out);
+
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/shadow";
+  _client.publish(topic.c_str(), out.c_str(), true);
+}
+
+void MqttManager::publishCommandAck(const char* cmdId,
+                                    const char* command,
+                                    bool accepted,
+                                    bool applied,
+                                    const char* reason,
+                                    const RuntimeState& rt,
+                                    uint32_t remainingSec) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  doc["cmdId"] = (cmdId && cmdId[0] != '\0') ? cmdId : "none";
+  doc["command"] = command ? command : "";
+  doc["accepted"] = accepted;
+  doc["applied"] = applied;
+  doc["reason"] = reason ? reason : "";
+
+  JsonObject reported = doc["reported"].to<JsonObject>();
+  reported["runState"] = runStateText(rt.runState);
+  reported["setpointC"] = rt.currentSetpointC;
+  reported["effectiveTimerSec"] = remainingSec;
+
+  String out;
+  serializeJson(doc, out);
+
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/event/cmd_ack";
+  _client.publish(topic.c_str(), out.c_str(), false);
 }
 
 void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {

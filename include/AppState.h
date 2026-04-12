@@ -101,6 +101,9 @@ struct RuntimeState {
 
   uint8_t currentStageIndex {0};
   uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
+  float desiredSetpointC {Config::DEFAULT_SETPOINT_C};
+  uint32_t desiredMinutes {Config::DEFAULT_STAGE_MINUTES};
+  char desiredRunAction[16] {"stop"};
   uint32_t stageStartedAtMs {0};
   uint32_t stageHoldStartedAtMs {0};
 
