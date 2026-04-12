@@ -109,6 +109,9 @@ const BrewStage* StageManager::getCurrentStage() const {
     case UiMode::Paused:
       strlcpy(_manualStage.name, "PAUSED", sizeof(_manualStage.name));
       break;
+    case UiMode::SettingsAdjust:
+      strlcpy(_manualStage.name, "SETTINGS", sizeof(_manualStage.name));
+      break;
   }
   _manualStage.targetC = _rt->currentSetpointC;
   _manualStage.holdSeconds = _rt->activeStageMinutes * 60UL;

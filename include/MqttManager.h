@@ -13,6 +13,7 @@ public:
   void publishStatus(const RuntimeState& rt, const char* activeStageName, uint32_t remainingSec);
   void publishCalibrationStatus(const PersistentConfig& cfg, const RuntimeState& rt);
   void publishProfileCompleteIfPending(RuntimeState& rt);
+  void publishConfig(const PersistentConfig& cfg, const RuntimeState& rt);
   bool isConnected();
 
   using CommandCallback = std::function<void(const char* topic, const char* payload)>;
