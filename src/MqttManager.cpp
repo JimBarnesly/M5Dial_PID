@@ -83,6 +83,17 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["heaterEnabled"] = rt.heatingEnabled;
   doc["controlMode"] = static_cast<uint8_t>(rt.controlMode);
   doc["runState"] = static_cast<uint8_t>(rt.runState);
+  doc["autoTunePhase"] = static_cast<uint8_t>(rt.autoTunePhase);
+  doc["autoTuneRiseTimeSec"] = rt.autoTuneRiseTimeSec;
+  doc["autoTuneOvershootC"] = rt.autoTuneOvershootC;
+  doc["autoTuneSettlingSec"] = rt.autoTuneSettlingSec;
+  doc["autoTuneQualityScore"] = rt.autoTuneQualityScore;
+  doc["pidKp"] = rt.currentKp;
+  doc["pidKi"] = rt.currentKi;
+  doc["pidKd"] = rt.currentKd;
+  doc["prevPidKp"] = rt.previousKp;
+  doc["prevPidKi"] = rt.previousKi;
+  doc["prevPidKd"] = rt.previousKd;
   doc["sensorHealthy"] = rt.sensorHealthy;
   doc["wifiConnected"] = rt.wifiConnected;
   doc["mqttConnected"] = rt.mqttConnected;

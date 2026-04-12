@@ -2,10 +2,14 @@
 #include <Arduino.h>
 
 void PidController::begin(float kp, float ki, float kd) {
-  _kp = kp;
-  _ki = ki;
-  _kd = kd;
+  setTunings(kp, ki, kd);
   reset();
+}
+
+void PidController::setTunings(float kp, float ki, float kd) {
+  _kp = max(0.0f, kp);
+  _ki = max(0.0f, ki);
+  _kd = max(0.0f, kd);
 }
 
 void PidController::reset() {
