@@ -29,6 +29,7 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.mqttTlsCaCert[0] = '\0';
   cfg.mqttCommsTimeoutSec = 0;
   cfg.mqttFallbackMode = MqttFallbackMode::HoldSetpoint;
+  cfg.wifiPortalTimeoutSec = Config::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC;
   cfg.pidKp = Config::PID_KP;
   cfg.pidKi = Config::PID_KI;
   cfg.pidKd = Config::PID_KD;
@@ -70,6 +71,7 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.mqttTlsAuthMode = doc["mqttTlsAuthMode"] | cfg.mqttTlsAuthMode;
   cfg.mqttCommsTimeoutSec = doc["mqttCommsTimeoutSec"] | cfg.mqttCommsTimeoutSec;
   cfg.mqttFallbackMode = static_cast<MqttFallbackMode>((uint8_t)(doc["mqttFallbackMode"] | (uint8_t)cfg.mqttFallbackMode));
+  cfg.wifiPortalTimeoutSec = doc["wifiPortalTimeoutSec"] | cfg.wifiPortalTimeoutSec;
   const bool canLoadSecrets = encryptedStorageAvailable();
   if (canLoadSecrets) {
     strlcpy(cfg.mqttUser, doc["mqttUser"] | cfg.mqttUser, sizeof(cfg.mqttUser));
@@ -142,6 +144,7 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["mqttTlsAuthMode"] = cfg.mqttTlsAuthMode;
   doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
   doc["mqttFallbackMode"] = static_cast<uint8_t>(cfg.mqttFallbackMode);
+  doc["wifiPortalTimeoutSec"] = cfg.wifiPortalTimeoutSec;
   if (encryptedStorageAvailable()) {
     doc["mqttUser"] = cfg.mqttUser;
     doc["mqttPass"] = cfg.mqttPass;

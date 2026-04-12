@@ -19,8 +19,13 @@ Current UX behaviour:
 - Current temp updates slowly by design.
 - Time remaining and power update without full-screen flicker.
 
-Known limitation:
-- Settings icon is visual only in this build.
+Settings updates:
+- Settings icon opens editable runtime settings pages.
+- Added on-device controls for MQTT comms timeout and fallback mode.
+- Added configurable Wi-Fi portal timeout used during commissioning.
+- Added remote profile lifecycle commands (`profile_upsert`, `profile_select`, `profile_start`, `profile_delete`).
+- Added remote diagnostics event log publishing (`/event/log`, `/cmd/get_events`).
+- Added autotune accept/reject command paths to commit or discard candidates.
 
 
 V4 notes:
