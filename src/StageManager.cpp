@@ -155,12 +155,25 @@ void StageManager::update(float currentTempC) {
   if (!_cfg || !_rt || _rt->runState != RunState::Running) return;
 
   const BrewProfile* profile = getActiveProfile();
-  if (!profile || _rt->currentStageIndex >= profile->stageCount) return;
+  const bool hasProfileStage = profile && (_rt->currentStageIndex < profile->stageCount);
 
-  const BrewStage& stage = profile->stages[_rt->currentStageIndex];
-  _rt->currentSetpointC = stage.targetC;
-  _rt->activeStageMinutes = (stage.holdSeconds + 59UL) / 60UL;
-  const uint32_t totalSec = stage.holdSeconds;
+  float targetC = _rt->currentSetpointC;
+  uint32_t totalSec = _rt->activeStageMinutes * 60UL;
+
+  if (hasProfileStage) {
+    const BrewStage& stage = profile->stages[_rt->currentStageIndex];
+    _rt->currentSetpointC = stage.targetC;
+    _rt->activeStageMinutes = (stage.holdSeconds + 59UL) / 60UL;
+    targetC = stage.targetC;
+    totalSec = stage.holdSeconds;
+  } else {
+    // Manual run path (no active profile stage): use locally configured setpoint/duration.
+    _rt->currentSetpointC = _cfg->localSetpointC;
+    _rt->activeStageMinutes = _cfg->manualStageMinutes;
+    targetC = _rt->currentSetpointC;
+    totalSec = _rt->activeStageMinutes * 60UL;
+  }
+
   if (totalSec == 0) {
     // Timer value of 0 means "hold indefinitely" (no auto-complete).
     _rt->stageTimerStarted = false;
@@ -168,7 +181,6 @@ void StageManager::update(float currentTempC) {
     return;
   }
 
-  const float targetC = stage.targetC;
   if (!_rt->stageTimerStarted && !isnan(currentTempC) && currentTempC >= targetC) {
     _rt->stageTimerStarted = true;
     _rt->stageHoldStartedAtMs = millis();
@@ -182,7 +194,7 @@ void StageManager::update(float currentTempC) {
       _rt->stageHoldStartedAtMs = 0;
 
       const uint8_t nextIndex = _rt->currentStageIndex + 1;
-      if (nextIndex < profile->stageCount) {
+      if (hasProfileStage && nextIndex < profile->stageCount) {
         _rt->currentStageIndex = nextIndex;
         const BrewStage& nextStage = profile->stages[nextIndex];
         _rt->currentSetpointC = nextStage.targetC;
@@ -193,9 +205,13 @@ void StageManager::update(float currentTempC) {
                  nextStage.targetC,
                  static_cast<unsigned long>(nextStage.holdSeconds));
       } else {
-        DBG_LOGF("StageManager: profile complete index=%u name='%s'\n",
-                 static_cast<unsigned>(_cfg->activeProfileIndex),
-                 profile->name);
+        if (hasProfileStage) {
+          DBG_LOGF("StageManager: profile complete index=%u name='%s'\n",
+                   static_cast<unsigned>(_cfg->activeProfileIndex),
+                   profile->name);
+        } else {
+          DBG_LOGLN("StageManager: manual hold complete");
+        }
         _rt->runState = RunState::Complete;
         _rt->uiMode = UiMode::SetpointAdjust;
         _rt->pendingProfileCompletePublish = true;
