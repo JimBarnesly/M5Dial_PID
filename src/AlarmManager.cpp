@@ -60,7 +60,11 @@ void AlarmManager::update() {
   const bool notifyActive = now < _notifyBeepUntilMs;
 
   if (alarmActive || notifyActive) {
-    if (_lastToggleMs == 0 || now - _lastToggleMs >= Config::BUZZER_TOGGLE_MS) {
+    if (_lastToggleMs == 0) {
+      _lastToggleMs = now;
+      _beepState = true;
+      digitalWrite(_buzzerPin, HIGH);
+    } else if (now - _lastToggleMs >= Config::ALARM_BEEP_MS) {
       _lastToggleMs = now;
       _beepState = !_beepState;
       digitalWrite(_buzzerPin, _beepState ? HIGH : LOW);
