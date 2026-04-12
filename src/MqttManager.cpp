@@ -116,6 +116,31 @@ void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   rt.pendingProfileCompletePublish = false;
 }
 
+void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState& rt) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  doc["controlLock"] = static_cast<uint8_t>(cfg.controlLock);
+  doc["localSetpointC"] = cfg.localSetpointC;
+  doc["manualStageMinutes"] = cfg.manualStageMinutes;
+  doc["overTempC"] = cfg.overTempC;
+  doc["mqttHost"] = cfg.mqttHost;
+  doc["mqttPort"] = cfg.mqttPort;
+  doc["pidKp"] = cfg.pidKp;
+  doc["pidKi"] = cfg.pidKi;
+  doc["pidKd"] = cfg.pidKd;
+  doc["activePidKp"] = rt.currentKp;
+  doc["activePidKi"] = rt.currentKi;
+  doc["activePidKd"] = rt.currentKd;
+  doc["autoTuneQualityScore"] = cfg.tuneQualityScore;
+
+  String out;
+  serializeJson(doc, out);
+
+  String topic = String(Config::MQTT_TOPIC_BASE) + "/config/effective";
+  _client.publish(topic.c_str(), out.c_str(), true);
+}
+
 bool MqttManager::isConnected() {
   return _client.connected();
 }

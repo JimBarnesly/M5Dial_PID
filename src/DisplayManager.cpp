@@ -234,6 +234,7 @@ void DisplayManager::drawStagePill(const RuntimeState& rt, const BrewStage* stag
   if (rt.activeAlarm != AlarmCode::None) text = rt.alarmText;
   else if (rt.uiMode == UiMode::SetpointAdjust) text = "SET TEMP";
   else if (rt.uiMode == UiMode::StageTimeAdjust) text = "SET TIME";
+  else if (rt.uiMode == UiMode::SettingsAdjust) text = "SETTINGS";
   else if (rt.runState == RunState::Complete) text = "COMPLETE";
   else if (rt.runState == RunState::Paused) text = "PAUSED";
   else if (stage) text = stage->name;
@@ -327,6 +328,17 @@ void DisplayManager::drawCenterTemp(const RuntimeState& rt, uint32_t now, bool f
 }
 
 void DisplayManager::drawTargetRow(const RuntimeState& rt, bool force) {
+  if (rt.uiMode == UiMode::SettingsAdjust) {
+    auto& d = M5Dial.Display;
+    d.fillRect(kTargetRowX, kTargetRowY, kTargetRowW, kTargetRowH, BG);
+    d.setTextDatum(middle_center);
+    d.setFont(&fonts::Font2);
+    d.setTextColor(GOLD, BG);
+    d.drawString(rt.settingsLabel[0] ? rt.settingsLabel : "SETTINGS", 120, kTargetRowY + (kTargetRowH / 2));
+    _lastSetpointC = rt.currentSetpointC;
+    return;
+  }
+
   if (!force && fabsf(_lastSetpointC - rt.currentSetpointC) < 0.05f) return;
 
   auto& d = M5Dial.Display;
@@ -345,7 +357,9 @@ void DisplayManager::drawTargetRow(const RuntimeState& rt, bool force) {
 
 void DisplayManager::drawInfoRow(const RuntimeState& rt, uint32_t remainingSec, bool force) {
   char infoBuf[32];
-  if (rt.uiMode == UiMode::StageTimeAdjust) {
+  if (rt.uiMode == UiMode::SettingsAdjust) {
+    snprintf(infoBuf, sizeof(infoBuf), "%s", rt.settingsValue[0] ? rt.settingsValue : "--");
+  } else if (rt.uiMode == UiMode::StageTimeAdjust) {
     snprintf(infoBuf, sizeof(infoBuf), "%s", formatMinutes(rt.activeStageMinutes).c_str());
   } else if (rt.activeStageMinutes == 0 && (rt.runState == RunState::Running || rt.runState == RunState::Paused)) {
     snprintf(infoBuf, sizeof(infoBuf), "INF");

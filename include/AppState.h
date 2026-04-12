@@ -37,7 +37,8 @@ enum class UiMode : uint8_t {
   SetpointAdjust = 0,
   StageTimeAdjust,
   Running,
-  Paused
+  Paused,
+  SettingsAdjust
 };
 
 enum class AlarmCode : uint8_t {
@@ -118,4 +119,6 @@ struct RuntimeState {
 
   AlarmCode activeAlarm {AlarmCode::None};
   char alarmText[64] {"OK"};
+  char settingsLabel[24] {""};
+  char settingsValue[48] {""};
 };
