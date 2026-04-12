@@ -14,6 +14,12 @@ enum class ControlMode : uint8_t {
   Remote
 };
 
+enum class MqttFallbackMode : uint8_t {
+  HoldSetpoint = 0,
+  Pause,
+  StopHeater
+};
+
 enum class RunState : uint8_t {
   Idle = 0,
   Running,
@@ -102,9 +108,14 @@ struct RuntimeState {
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};
   bool heatOn {false};
+  uint32_t lastValidMqttConnectionAtMs {0};
+  uint32_t lastAcceptedRemoteCommandAtMs {0};
 
   uint8_t currentStageIndex {0};
   uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
+  float desiredSetpointC {Config::DEFAULT_SETPOINT_C};
+  uint32_t desiredMinutes {Config::DEFAULT_STAGE_MINUTES};
+  char desiredRunAction[16] {"stop"};
   uint32_t stageStartedAtMs {0};
   uint32_t stageHoldStartedAtMs {0};
 
