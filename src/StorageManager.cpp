@@ -15,6 +15,8 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.overTempC = 99.0f;
   strncpy(cfg.mqttHost, "192.168.1.10", sizeof(cfg.mqttHost)-1);
   cfg.mqttPort = 1883;
+  cfg.mqttCommsTimeoutSec = Config::DEFAULT_MQTT_COMMS_TIMEOUT_SEC;
+  cfg.mqttFallbackMode = MqttFallbackMode::HoldSetpoint;
   cfg.pidKp = Config::PID_KP;
   cfg.pidKi = Config::PID_KI;
   cfg.pidKd = Config::PID_KD;
@@ -52,6 +54,8 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.mqttPort = doc["mqttPort"] | cfg.mqttPort;
   strlcpy(cfg.mqttUser, doc["mqttUser"] | cfg.mqttUser, sizeof(cfg.mqttUser));
   strlcpy(cfg.mqttPass, doc["mqttPass"] | cfg.mqttPass, sizeof(cfg.mqttPass));
+  cfg.mqttCommsTimeoutSec = doc["mqttCommsTimeoutSec"] | cfg.mqttCommsTimeoutSec;
+  cfg.mqttFallbackMode = static_cast<MqttFallbackMode>((uint8_t)(doc["mqttFallbackMode"] | (uint8_t)cfg.mqttFallbackMode));
   cfg.pidKp = doc["pidKp"] | cfg.pidKp;
   cfg.pidKi = doc["pidKi"] | cfg.pidKi;
   cfg.pidKd = doc["pidKd"] | cfg.pidKd;
@@ -76,6 +80,8 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["mqttPort"] = cfg.mqttPort;
   doc["mqttUser"] = cfg.mqttUser;
   doc["mqttPass"] = cfg.mqttPass;
+  doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
+  doc["mqttFallbackMode"] = (uint8_t)cfg.mqttFallbackMode;
   doc["pidKp"] = cfg.pidKp;
   doc["pidKi"] = cfg.pidKi;
   doc["pidKd"] = cfg.pidKd;

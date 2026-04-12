@@ -41,6 +41,7 @@ DisplayManager gDisplay;
 uint32_t gLastStatusMs = 0, gLastPidMs = 0, gLastMqttServiceMs = 0, gHeatEvalWindowStart = 0;
 float gHeatEvalStartTemp = NAN;
 bool gCompletionHandled = false;
+bool gPendingAlarmStatusPublish = false;
 
 struct AutoTuneContext {
   bool active {false};
@@ -250,7 +251,37 @@ void clearFaultIfRecoverable() {
   if (gAlarm.getAlarm() == AlarmCode::HeatingIneffective && !isnan(gHeatEvalStartTemp) && gRt.currentTempC >= gHeatEvalStartTemp + Config::MIN_EXPECTED_RISE_C) {
     gAlarm.clearAlarm();
   }
+  if (gAlarm.getAlarm() == AlarmCode::MqttOffline && gRt.mqttConnected) gAlarm.clearAlarm();
   syncAlarmFromManager();
+}
+
+static bool remoteCommsTimedOut(uint32_t now) {
+  if (gCfg.mqttCommsTimeoutSec == 0) return false;
+  if (gRt.controlMode != ControlMode::Remote) return false;
+  if (gRt.runState != RunState::Running && gRt.runState != RunState::Paused) return false;
+  if (gRt.mqttConnected) return false;
+
+  const uint32_t lastCommsMs = max(gRt.lastValidMqttConnectionAtMs, gRt.lastAcceptedRemoteCommandAtMs);
+  const uint32_t timeoutMs = gCfg.mqttCommsTimeoutSec * 1000UL;
+  return (now - lastCommsMs) >= timeoutMs;
+}
+
+static void applyMqttTimeoutFallback() {
+  switch (gCfg.mqttFallbackMode) {
+    case MqttFallbackMode::HoldSetpoint:
+      break;
+    case MqttFallbackMode::Pause:
+      gStages.pause();
+      break;
+    case MqttFallbackMode::StopHeater:
+      gStages.stop();
+      gCompletionHandled = false;
+      gHeater.setEnabled(false);
+      gHeater.setOutputPercent(0.0f);
+      gRt.heatingEnabled = false;
+      gRt.heaterOutputPct = 0.0f;
+      break;
+  }
 }
 
 void handleCommands(const char* topic, const char* payload) {
@@ -258,6 +289,7 @@ void handleCommands(const char* topic, const char* payload) {
   String t(topic);
   JsonDocument doc;
   deserializeJson(doc, payload);
+  bool accepted = false;
 
   if (t.endsWith("/cmd/setpoint")) {
     if (gCfg.controlLock != ControlLock::LocalOnly &&
@@ -267,6 +299,7 @@ void handleCommands(const char* topic, const char* payload) {
       gRt.currentSetpointC = gCfg.localSetpointC;
       gStorage.save(gCfg);
       gDisplay.invalidateAll();
+      accepted = true;
     }
   } else if (t.endsWith("/cmd/minutes")) {
     int32_t mins = doc["minutes"] | atoi(payload);
@@ -276,24 +309,30 @@ void handleCommands(const char* topic, const char* payload) {
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
     gStorage.save(gCfg);
     gDisplay.invalidateAll();
+    accepted = true;
   } else if (t.endsWith("/cmd/start")) {
     gStages.startProfile(0);
     gCompletionHandled = false;
     gDisplay.invalidateAll();
+    accepted = true;
   } else if (t.endsWith("/cmd/pause")) {
     gStages.pause();
     gDisplay.invalidateAll();
+    accepted = true;
   } else if (t.endsWith("/cmd/stop")) {
     gStages.stop();
     gCompletionHandled = false;
     gDisplay.invalidateAll();
+    accepted = true;
   } else if (t.endsWith("/cmd/reset_alarm")) {
     gAlarm.clearAlarm();
     syncAlarmFromManager();
     gDisplay.invalidateAll();
+    accepted = true;
   } else if (t.endsWith("/cmd/start_autotune")) {
     startAutoTune();
     gDisplay.invalidateAll();
+    accepted = true;
   } else if (t.endsWith("/cmd/accept_tune")) {
     if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
       gCfg.prevPidKp = gCfg.pidKp;
@@ -310,6 +349,11 @@ void handleCommands(const char* topic, const char* payload) {
       gStorage.save(gCfg);
     }
     gDisplay.invalidateAll();
+    accepted = true;
+  }
+
+  if (accepted) {
+    gRt.lastAcceptedRemoteCommandAtMs = millis();
   }
 }
 
@@ -499,6 +543,8 @@ void setup() {
   gRt.activeStageMinutes = gCfg.manualStageMinutes;
   gRt.controlMode = (gCfg.controlLock == ControlLock::RemoteOnly) ? ControlMode::Remote : ControlMode::Local;
   gRt.uiMode = UiMode::SetpointAdjust;
+  gRt.lastValidMqttConnectionAtMs = millis();
+  gRt.lastAcceptedRemoteCommandAtMs = gRt.lastValidMqttConnectionAtMs;
 
   gTempSensor.begin();
   applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
@@ -553,6 +599,14 @@ void loop() {
     gRt.mqttConnected = false;
   }
 
+  if (remoteCommsTimedOut(now) && gAlarm.getAlarm() != AlarmCode::MqttOffline) {
+    gAlarm.setAlarm(AlarmCode::MqttOffline, alarmText(AlarmCode::MqttOffline));
+    applyMqttTimeoutFallback();
+    syncAlarmFromManager();
+    gPendingAlarmStatusPublish = true;
+    gDisplay.invalidateAll();
+  }
+
   updateSafety();
   updateControl();
   gHeater.update();
@@ -585,6 +639,11 @@ void loop() {
       if (!gDebugDisableMqtt) gMqtt.publishProfileCompleteIfPending(gRt);
     }
     gStorage.save(gCfg);
+  }
+
+  if (gPendingAlarmStatusPublish && gRt.mqttConnected) {
+    gMqtt.publishStatus(gRt, stage ? stage->name : "", remaining);
+    gPendingAlarmStatusPublish = false;
   }
 
   static uint32_t lastDebugStateMs = 0;

@@ -34,6 +34,7 @@ void MqttManager::update() {
     // MQTT loop servicing
     _client.loop();
     _rt->mqttConnected = true;
+    _rt->lastValidMqttConnectionAtMs = millis();
     return;
   }
 
@@ -55,6 +56,7 @@ void MqttManager::tryReconnect() {
   if (ok) {
     DBG_LOGLN("MQTT connected");
     subscribeTopics();
+    _rt->lastValidMqttConnectionAtMs = millis();
   } else {
     DBG_LOGLN("MQTT reconnect failed");
   }
@@ -97,6 +99,8 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["sensorHealthy"] = rt.sensorHealthy;
   doc["wifiConnected"] = rt.wifiConnected;
   doc["mqttConnected"] = rt.mqttConnected;
+  doc["lastValidMqttConnectionAtMs"] = rt.lastValidMqttConnectionAtMs;
+  doc["lastAcceptedRemoteCommandAtMs"] = rt.lastAcceptedRemoteCommandAtMs;
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
   doc["alarmText"] = rt.alarmText;
   doc["activeStage"] = activeStageName ? activeStageName : "";
