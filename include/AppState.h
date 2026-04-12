@@ -67,9 +67,13 @@ struct PersistentConfig {
   float stageStartBandC {Config::DEFAULT_STAGE_START_BAND_C};
   float overTempC {Config::DEFAULT_OVER_TEMP_C};
   char mqttHost[64] {"192.168.1.10"};
-  uint16_t mqttPort {1883};
+  uint16_t mqttPort {Config::MQTT_PORT_PLAIN};
   char mqttUser[32] {""};
   char mqttPass[32] {""};
+  bool mqttUseTls {false};
+  uint8_t mqttTlsAuthMode {0};  // 0=none, 1=fingerprint pin, 2=CA cert pin
+  char mqttTlsFingerprint[96] {""};  // e.g. AA:BB:...
+  char mqttTlsCaCert[768] {""};      // PEM
   float pidKp {Config::PID_KP};
   float pidKi {Config::PID_KI};
   float pidKd {Config::PID_KD};

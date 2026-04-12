@@ -1,6 +1,11 @@
 #include "StorageManager.h"
 #include <ArduinoJson.h>
 #include <cstring>
+#include <esp_system.h>
+
+bool StorageManager::encryptedStorageAvailable() const {
+  return esp_flash_encryption_enabled();
+}
 
 void StorageManager::begin() {
   _prefs.begin("brew-hlt", false);
@@ -14,7 +19,11 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.manualStageMinutes = 60;
   cfg.overTempC = 99.0f;
   strncpy(cfg.mqttHost, "192.168.1.10", sizeof(cfg.mqttHost)-1);
-  cfg.mqttPort = 1883;
+  cfg.mqttPort = Config::MQTT_PORT_PLAIN;
+  cfg.mqttUseTls = false;
+  cfg.mqttTlsAuthMode = 0;
+  cfg.mqttTlsFingerprint[0] = '\0';
+  cfg.mqttTlsCaCert[0] = '\0';
   cfg.pidKp = Config::PID_KP;
   cfg.pidKi = Config::PID_KI;
   cfg.pidKd = Config::PID_KD;
@@ -50,8 +59,20 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.controlLock = static_cast<ControlLock>((uint8_t)(doc["controlLock"] | (uint8_t)cfg.controlLock));
   strlcpy(cfg.mqttHost, doc["mqttHost"] | cfg.mqttHost, sizeof(cfg.mqttHost));
   cfg.mqttPort = doc["mqttPort"] | cfg.mqttPort;
-  strlcpy(cfg.mqttUser, doc["mqttUser"] | cfg.mqttUser, sizeof(cfg.mqttUser));
-  strlcpy(cfg.mqttPass, doc["mqttPass"] | cfg.mqttPass, sizeof(cfg.mqttPass));
+  cfg.mqttUseTls = doc["mqttUseTls"] | cfg.mqttUseTls;
+  cfg.mqttTlsAuthMode = doc["mqttTlsAuthMode"] | cfg.mqttTlsAuthMode;
+  const bool canLoadSecrets = encryptedStorageAvailable();
+  if (canLoadSecrets) {
+    strlcpy(cfg.mqttUser, doc["mqttUser"] | cfg.mqttUser, sizeof(cfg.mqttUser));
+    strlcpy(cfg.mqttPass, doc["mqttPass"] | cfg.mqttPass, sizeof(cfg.mqttPass));
+    strlcpy(cfg.mqttTlsFingerprint, doc["mqttTlsFingerprint"] | cfg.mqttTlsFingerprint, sizeof(cfg.mqttTlsFingerprint));
+    strlcpy(cfg.mqttTlsCaCert, doc["mqttTlsCaCert"] | cfg.mqttTlsCaCert, sizeof(cfg.mqttTlsCaCert));
+  } else {
+    cfg.mqttUser[0] = '\0';
+    cfg.mqttPass[0] = '\0';
+    cfg.mqttTlsFingerprint[0] = '\0';
+    cfg.mqttTlsCaCert[0] = '\0';
+  }
   cfg.pidKp = doc["pidKp"] | cfg.pidKp;
   cfg.pidKi = doc["pidKi"] | cfg.pidKi;
   cfg.pidKd = doc["pidKd"] | cfg.pidKd;
@@ -74,8 +95,14 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["controlLock"] = (uint8_t)cfg.controlLock;
   doc["mqttHost"] = cfg.mqttHost;
   doc["mqttPort"] = cfg.mqttPort;
-  doc["mqttUser"] = cfg.mqttUser;
-  doc["mqttPass"] = cfg.mqttPass;
+  doc["mqttUseTls"] = cfg.mqttUseTls;
+  doc["mqttTlsAuthMode"] = cfg.mqttTlsAuthMode;
+  if (encryptedStorageAvailable()) {
+    doc["mqttUser"] = cfg.mqttUser;
+    doc["mqttPass"] = cfg.mqttPass;
+    doc["mqttTlsFingerprint"] = cfg.mqttTlsFingerprint;
+    doc["mqttTlsCaCert"] = cfg.mqttTlsCaCert;
+  }
   doc["pidKp"] = cfg.pidKp;
   doc["pidKi"] = cfg.pidKi;
   doc["pidKd"] = cfg.pidKd;

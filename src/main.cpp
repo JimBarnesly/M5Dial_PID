@@ -213,6 +213,18 @@ static void debugLogBanner() {
              !gDebugDisableMqtt);
 }
 
+static String maskSecret(const char* value) {
+  if (!value || value[0] == '\0') return "<empty>";
+  const size_t len = strlen(value);
+  if (len <= 2) return "**";
+  String out;
+  out.reserve(len);
+  for (size_t i = 0; i < len - 2; ++i) out += '*';
+  out += value[len - 2];
+  out += value[len - 1];
+  return out;
+}
+
 static void debugPrintState(const char* tag) {
   DBG_PRINTF("[%s] run=%u ui=%u temp=%.2f sp=%.2f mins=%lu out=%.1f heat=%d wifi=%d mqtt=%d timer=%d alarm=%u\n",
              tag,
@@ -254,7 +266,7 @@ void clearFaultIfRecoverable() {
 }
 
 void handleCommands(const char* topic, const char* payload) {
-  DBG_PRINTF("MQTT cmd topic=%s payload=%s\n", topic, payload);
+  DBG_PRINTF("MQTT cmd topic=%s payloadBytes=%u\n", topic, static_cast<unsigned>(strlen(payload)));
   String t(topic);
   JsonDocument doc;
   deserializeJson(doc, payload);
@@ -512,6 +524,9 @@ void setup() {
 
   if (!gDebugDisableWifi) {
     gWifi.begin();
+    DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
+               gWifi.getPortalApName(),
+               maskSecret(gWifi.getPortalApPassword()).c_str());
   } else {
     DBG_PRINTLN("WiFi disabled by debug toggle");
     gRt.wifiConnected = false;

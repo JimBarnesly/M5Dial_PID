@@ -9,8 +9,10 @@ MqttManager::MqttManager() : _client(_wifiClient) {}
 void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _cfg = cfg;
   _rt = rt;
+  _transportClient = &_wifiClient;
   _client.setBufferSize(1024);
-  _client.setServer(cfg->mqttHost, cfg->mqttPort);
+  configureClientForSecurity(true);
+  _client.setServer(cfg->mqttHost, effectivePort());
   _client.setCallback([this](char* topic, byte* payload, unsigned int length) {
     this->handleMessage(topic, payload, length);
   });
@@ -23,7 +25,8 @@ void MqttManager::setCommandCallback(CommandCallback cb) {
 void MqttManager::update() {
   if (!_cfg || !_rt) return;
 
-  _client.setServer(_cfg->mqttHost, _cfg->mqttPort);
+  configureClientForSecurity();
+  _client.setServer(_cfg->mqttHost, effectivePort());
 
   if (!_rt->wifiConnected) {
     _rt->mqttConnected = false;
@@ -53,7 +56,7 @@ void MqttManager::tryReconnect() {
   }
 
   if (ok) {
-    DBG_LOGLN("MQTT connected");
+    DBG_LOGF("MQTT connected (%s:%u tls=%d)\n", _cfg->mqttHost, effectivePort(), _cfg->mqttUseTls);
     subscribeTopics();
   } else {
     DBG_LOGLN("MQTT reconnect failed");
@@ -118,4 +121,36 @@ void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
 
 bool MqttManager::isConnected() {
   return _client.connected();
+}
+
+uint16_t MqttManager::effectivePort() const {
+  if (!_cfg) return Config::MQTT_PORT_PLAIN;
+  if (_cfg->mqttUseTls && _cfg->mqttPort == Config::MQTT_PORT_PLAIN) return Config::MQTT_PORT_TLS;
+  return _cfg->mqttPort;
+}
+
+void MqttManager::configureClientForSecurity(bool force) {
+  if (!_cfg) return;
+
+  const bool tlsEnabled = _cfg->mqttUseTls;
+  const uint16_t desiredPort = effectivePort();
+  if (!force && tlsEnabled == _lastTlsEnabled && desiredPort == _lastPort) return;
+
+  if (tlsEnabled) {
+    _transportClient = &_wifiSecureClient;
+    _wifiSecureClient.setHandshakeTimeout(15);
+    if (_cfg->mqttTlsAuthMode == 1 && strlen(_cfg->mqttTlsFingerprint) > 0) {
+      _wifiSecureClient.setFingerprint(_cfg->mqttTlsFingerprint);
+    } else if (_cfg->mqttTlsAuthMode == 2 && strlen(_cfg->mqttTlsCaCert) > 0) {
+      _wifiSecureClient.setCACert(_cfg->mqttTlsCaCert);
+    } else {
+      _wifiSecureClient.setInsecure();
+    }
+  } else {
+    _transportClient = &_wifiClient;
+  }
+
+  _client.setClient(*_transportClient);
+  _lastTlsEnabled = tlsEnabled;
+  _lastPort = desiredPort;
 }
