@@ -18,8 +18,8 @@
 #include "DebugControl.h"
 
 bool gDebugEnabled = true;
-bool gDebugDisableWifi = true;
-bool gDebugDisableMqtt = true;
+bool gDebugDisableWifi = false;
+bool gDebugDisableMqtt = false;
 bool gDebugVerboseInput = false;
 
 #define DBG_BEGIN(...) do { if (gDebugEnabled) Serial.begin(__VA_ARGS__); } while (0)
@@ -208,10 +208,12 @@ static void updateAutoTune() {
 
 static void debugLogBanner() {
   DBG_PRINTLN("\n=== BrewCore HLT V8 debug boot ===");
-  DBG_PRINTF("DEBUG_ENABLED=%d WIFI=%d MQTT=%d\n",
+  DBG_PRINTF("DEBUG_ENABLED=%d WIFI=%d MQTT=%d NET_MODE=%s RUNTIME_NET_TOGGLES=%d\n",
              gDebugEnabled,
-             !gDebugDisableWifi,
-             !gDebugDisableMqtt);
+             !debugWifiDisabledEffective(),
+             !debugMqttDisabledEffective(),
+             debugNetworkModeLabel(),
+             debugRuntimeNetworkTogglesEnabled());
 }
 
 static String maskSecret(const char* value) {
@@ -857,21 +859,21 @@ void setup() {
   gAlarm.begin();
   gStages.begin(&gCfg, &gRt);
 
-  if (!gDebugDisableWifi) {
+  if (!debugWifiDisabledEffective()) {
     gWifi.begin();
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
   } else {
-    DBG_PRINTLN("WiFi disabled by debug toggle");
+    DBG_LOGLN("WiFi disabled by debug/compile-time network mode");
     gRt.wifiConnected = false;
   }
 
-  if (!gDebugDisableMqtt) {
+  if (!debugMqttDisabledEffective()) {
     gMqtt.begin(&gCfg, &gRt);
     gMqtt.setCommandCallback(handleCommands);
   } else {
-    DBG_PRINTLN("MQTT disabled by debug toggle");
+    DBG_LOGLN("MQTT disabled by debug/compile-time network mode");
     gRt.mqttConnected = false;
   }
 
@@ -883,7 +885,7 @@ void loop() {
   processInput();
   const uint32_t now = millis();
 
-  if (!gDebugDisableWifi) {
+  if (!debugWifiDisabledEffective()) {
     gWifi.update();
     gRt.wifiConnected = gWifi.isConnected();
   } else {
@@ -898,10 +900,10 @@ void loop() {
     DBG_PRINTF("Temp update: %.2fC\n", gRt.currentTempC);
   }
 
-  if (!gDebugDisableMqtt && now - gLastMqttServiceMs >= 50) {
+  if (!debugMqttDisabledEffective() && now - gLastMqttServiceMs >= 50) {
     gLastMqttServiceMs = now;
     if (gRt.wifiConnected) gMqtt.update();
-  } else if (gDebugDisableMqtt) {
+  } else if (debugMqttDisabledEffective()) {
     gRt.mqttConnected = false;
   }
 
@@ -933,7 +935,7 @@ void loop() {
       gCompletionHandled = true;
       gDisplay.invalidateAll();
     }
-    if (gRt.mqttConnected && !gDebugDisableMqtt) gMqtt.publishProfileCompleteIfPending(gRt);
+    if (gRt.mqttConnected && !debugMqttDisabledEffective()) gMqtt.publishProfileCompleteIfPending(gRt);
   } else {
     gCompletionHandled = false;
   }
@@ -942,7 +944,7 @@ void loop() {
     gLastStatusMs = now;
     if (gRt.mqttConnected) {
       gMqtt.publishStatus(gRt, stage ? stage->name : "", remaining);
-      if (!gDebugDisableMqtt) gMqtt.publishProfileCompleteIfPending(gRt);
+      if (!debugMqttDisabledEffective()) gMqtt.publishProfileCompleteIfPending(gRt);
     }
     gStorage.save(gCfg);
   }

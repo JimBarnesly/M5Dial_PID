@@ -117,8 +117,11 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["tempPlausible"] = rt.tempPlausible;
   doc["wifiConnected"] = rt.wifiConnected;
   doc["mqttConnected"] = rt.mqttConnected;
-  doc["lastValidMqttConnectionAtMs"] = rt.lastValidMqttConnectionAtMs;
-  doc["lastAcceptedRemoteCommandAtMs"] = rt.lastAcceptedRemoteCommandAtMs;
+  doc["debugEnabled"] = gDebugEnabled;
+  doc["runtimeNetworkToggles"] = debugRuntimeNetworkTogglesEnabled();
+  doc["wifiDisabledEffective"] = debugWifiDisabledEffective();
+  doc["mqttDisabledEffective"] = debugMqttDisabledEffective();
+  doc["networkMode"] = debugNetworkModeLabel();
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
   doc["alarmText"] = rt.alarmText;
   doc["activeStage"] = activeStageName ? activeStageName : "";
