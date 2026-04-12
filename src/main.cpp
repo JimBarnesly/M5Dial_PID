@@ -382,7 +382,22 @@ void handleCommands(const char* topic, const char* payload) {
   String t(topic);
   JsonDocument doc;
   deserializeJson(doc, payload);
+  const char* command = "unknown";
   bool accepted = false;
+  bool applied = true;
+  const char* reason = "ok";
+  bool needsStorageSave = false;
+  bool needsDisplayRefresh = false;
+  const char* cmdId = doc["cmdId"] | "";
+  auto finishAck = [&]() {
+    gMqtt.publishCommandAck(cmdId,
+                            command,
+                            accepted,
+                            applied,
+                            reason,
+                            gRt,
+                            gStages.getRemainingSeconds());
+  };
 
   if (t.endsWith("/cmd/setpoint")) {
     if (gCfg.controlLock != ControlLock::LocalOnly &&
