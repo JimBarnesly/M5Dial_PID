@@ -29,88 +29,34 @@ V4 notes:
 - ring follows the outer thin countdown layout from the Stitch mock
 - bottom icons are rendered with primitives instead of text glyphs for runtime stability
 
-## MQTT topic schema (Node-RED integration)
+## Secure commissioning and minimum safe defaults
 
-Base topic: `brew/hlt`
+This firmware now avoids shipping fixed AP credentials and supports secure MQTT transport options.
 
-### Command topics (subscribe/publish from Node-RED to device)
+### 1) First boot / Wi-Fi onboarding
+- On first boot (or after clearing Wi-Fi credentials), the device starts a WiFiManager portal AP.
+- The AP SSID and password are generated per-device from hardware identity (no shared default password).
+- In serial debug logs, the AP password is masked so full credentials are not exposed.
 
-- `brew/hlt/cmd/setpoint`  
-  Payload example:
-  ```json
-  {"cmdId":"nr-1001","setpointC":67.5}
-  ```
-- `brew/hlt/cmd/minutes`  
-  Payload example:
-  ```json
-  {"cmdId":"nr-1002","minutes":90}
-  ```
-- `brew/hlt/cmd/start`
-- `brew/hlt/cmd/pause`
-- `brew/hlt/cmd/stop`
-- `brew/hlt/cmd/reset_alarm`
-- `brew/hlt/cmd/start_autotune`
-- `brew/hlt/cmd/accept_tune`
+### 2) MQTT security modes
+Set these `PersistentConfig` fields before deployment (via your existing config channel):
+- `mqttUseTls=true` to enable TLS.
+- `mqttPort`:
+  - Use `8883` for TLS brokers.
+  - If TLS is enabled and `mqttPort` is left at `1883`, firmware automatically uses `8883`.
+- `mqttTlsAuthMode`:
+  - `0`: TLS with insecure server auth (transport encryption only; not recommended outside test networks).
+  - `1`: certificate fingerprint pinning using `mqttTlsFingerprint`.
+  - `2`: CA certificate pinning using `mqttTlsCaCert` (PEM).
 
-For action commands (no scalar value), a minimal payload with only `cmdId` is enough:
-```json
-{"cmdId":"nr-1003"}
-```
+### 3) Secret handling / storage behavior
+- Status publishing and debug output avoid printing plaintext secrets.
+- MQTT command logs now print payload size only, not full payload content.
+- Plaintext secret persistence is blocked unless encrypted flash storage is available:
+  - `mqttUser`, `mqttPass`, `mqttTlsFingerprint`, and `mqttTlsCaCert` are saved only when flash encryption is enabled.
+  - Without encrypted storage, those fields are kept in-memory for runtime use but not persisted.
 
-### Command acknowledgement topic (device -> Node-RED)
-
-- `brew/hlt/event/cmd_ack` (non-retained)
-
-Payload schema:
-```json
-{
-  "cmdId": "nr-1003",
-  "command": "start",
-  "accepted": true,
-  "applied": false,
-  "reason": "wrong_run_state",
-  "reported": {
-    "runState": "running",
-    "setpointC": 67.5,
-    "effectiveTimerSec": 5100
-  }
-}
-```
-
-`reason` values include:
-- `applied`
-- `invalid_json`
-- `unsupported_command`
-- `control_lock_local_only`
-- `invalid_range_setpoint`
-- `invalid_range_minutes`
-- `wrong_run_state`
-
-### Device shadow topic (device -> Node-RED)
-
-- `brew/hlt/shadow` (retained)
-
-Payload schema:
-```json
-{
-  "desired": {
-    "setpointC": 67.5,
-    "minutes": 90,
-    "runAction": "start"
-  },
-  "reported": {
-    "runState": "running",
-    "setpointC": 67.5,
-    "effectiveTimerSec": 5100,
-    "stageTimerStarted": true
-  }
-}
-```
-
-Shadow intent:
-- `desired.*` is the latest requested operator intent from remote commands.
-- `reported.*` is what the controller is currently doing at runtime.
-
-### Existing status topic (device -> Node-RED)
-
-- `brew/hlt/status` (retained, full telemetry snapshot)
+### Minimum safe defaults (recommended)
+- Change onboarding Wi-Fi credentials immediately after first connection and disable open commissioning windows in production.
+- Use `mqttUseTls=true`, `mqttPort=8883`, and `mqttTlsAuthMode=2` (CA pinning) whenever possible.
+- Avoid `mqttTlsAuthMode=0` except temporary lab testing.

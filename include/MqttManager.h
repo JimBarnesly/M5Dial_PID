@@ -1,5 +1,6 @@
 #pragma once
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <functional>
 #include "AppState.h"
@@ -26,12 +27,18 @@ public:
 
 private:
   WiFiClient _wifiClient;
+  WiFiClientSecure _wifiSecureClient;
+  Client* _transportClient {nullptr};
   PubSubClient _client;
   PersistentConfig* _cfg {nullptr};
   RuntimeState* _rt {nullptr};
   uint32_t _lastReconnectMs {0};
+  bool _lastTlsEnabled {false};
+  uint16_t _lastPort {0};
   CommandCallback _commandCallback;
 
+  void configureClientForSecurity(bool force = false);
+  uint16_t effectivePort() const;
   void tryReconnect();
   void handleMessage(char* topic, byte* payload, unsigned int length);
   void subscribeTopics();
