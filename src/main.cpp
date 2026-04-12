@@ -257,60 +257,178 @@ void handleCommands(const char* topic, const char* payload) {
   DBG_PRINTF("MQTT cmd topic=%s payload=%s\n", topic, payload);
   String t(topic);
   JsonDocument doc;
-  deserializeJson(doc, payload);
+  const DeserializationError jsonErr = deserializeJson(doc, payload);
+  const char* cmdId = doc["cmdId"] | doc["cmd_id"] | "";
+  String command = "";
+  bool accepted = false;
+  bool applied = false;
+  const char* reason = "unsupported_command";
+  bool needsDisplayRefresh = false;
+  bool needsStorageSave = false;
+
+  auto finishAck = [&]() {
+    const uint32_t remainingSec = gStages.getRemainingSeconds();
+    gMqtt.publishCommandAck(cmdId, command.c_str(), accepted, applied, reason, gRt, remainingSec);
+    gMqtt.publishShadow(gRt, remainingSec);
+  };
+
+  if (jsonErr) {
+    accepted = false;
+    applied = false;
+    reason = "invalid_json";
+    finishAck();
+    return;
+  }
 
   if (t.endsWith("/cmd/setpoint")) {
-    if (gCfg.controlLock != ControlLock::LocalOnly &&
-        (gRt.uiMode == UiMode::SetpointAdjust || gRt.runState == RunState::Idle || gRt.runState == RunState::Complete)) {
-      gRt.controlMode = ControlMode::Remote;
-      gCfg.localSetpointC = doc["setpointC"] | atof(payload);
-      gRt.currentSetpointC = gCfg.localSetpointC;
-      gStorage.save(gCfg);
-      gDisplay.invalidateAll();
+    command = "setpoint";
+    gRt.desiredSetpointC = doc["setpointC"] | gCfg.localSetpointC;
+    if (gCfg.controlLock == ControlLock::LocalOnly) {
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
     }
+    if (!(gRt.uiMode == UiMode::SetpointAdjust || gRt.runState == RunState::Idle || gRt.runState == RunState::Complete)) {
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
+
+    const float requestedSetpoint = doc["setpointC"] | atof(payload);
+    accepted = true;
+    if (!isfinite(requestedSetpoint) || requestedSetpoint < 20.0f || requestedSetpoint > 100.0f) {
+      applied = false;
+      reason = "invalid_range_setpoint";
+      finishAck();
+      return;
+    }
+    gRt.controlMode = ControlMode::Remote;
+    gCfg.localSetpointC = requestedSetpoint;
+    gRt.currentSetpointC = gCfg.localSetpointC;
+    gRt.desiredSetpointC = requestedSetpoint;
+    needsStorageSave = true;
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/minutes")) {
+    command = "minutes";
     int32_t mins = doc["minutes"] | atoi(payload);
-    if (mins < 0) mins = 0;
-    if (mins > 480) mins = 480;
+    gRt.desiredMinutes = mins < 0 ? 0 : static_cast<uint32_t>(mins);
+    accepted = true;
+    if (mins < 0 || mins > 480) {
+      applied = false;
+      reason = "invalid_range_minutes";
+      finishAck();
+      return;
+    }
     gCfg.manualStageMinutes = static_cast<uint32_t>(mins);
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
-    gStorage.save(gCfg);
-    gDisplay.invalidateAll();
+    gRt.desiredMinutes = gCfg.manualStageMinutes;
+    needsStorageSave = true;
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/start")) {
+    command = "start";
+    strlcpy(gRt.desiredRunAction, "start", sizeof(gRt.desiredRunAction));
+    accepted = true;
+    if (gRt.runState == RunState::Running || gRt.runState == RunState::AutoTune || gRt.runState == RunState::Fault) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     gStages.startProfile(0);
     gCompletionHandled = false;
-    gDisplay.invalidateAll();
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/pause")) {
+    command = "pause";
+    strlcpy(gRt.desiredRunAction, "pause", sizeof(gRt.desiredRunAction));
+    accepted = true;
+    if (gRt.runState != RunState::Running) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     gStages.pause();
-    gDisplay.invalidateAll();
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/stop")) {
+    command = "stop";
+    strlcpy(gRt.desiredRunAction, "stop", sizeof(gRt.desiredRunAction));
+    accepted = true;
+    if (gRt.runState == RunState::AutoTune) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     gStages.stop();
     gCompletionHandled = false;
-    gDisplay.invalidateAll();
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/reset_alarm")) {
+    command = "reset_alarm";
+    accepted = true;
     gAlarm.clearAlarm();
     syncAlarmFromManager();
-    gDisplay.invalidateAll();
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/start_autotune")) {
-    startAutoTune();
-    gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/accept_tune")) {
-    if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
-      gCfg.prevPidKp = gCfg.pidKp;
-      gCfg.prevPidKi = gCfg.pidKi;
-      gCfg.prevPidKd = gCfg.pidKd;
-      gCfg.pidKp = gRt.currentKp;
-      gCfg.pidKi = gRt.currentKi;
-      gCfg.pidKd = gRt.currentKd;
-      gCfg.tuneQualityScore = gRt.autoTuneQualityScore;
-      gRt.previousKp = gCfg.prevPidKp;
-      gRt.previousKi = gCfg.prevPidKi;
-      gRt.previousKd = gCfg.prevPidKd;
-      gRt.autoTunePhase = AutoTunePhase::Complete;
-      gStorage.save(gCfg);
+    command = "start_autotune";
+    accepted = true;
+    if (!gRt.sensorHealthy || isnan(gRt.currentTempC) || gRt.runState == RunState::Running || gRt.runState == RunState::Paused) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
     }
-    gDisplay.invalidateAll();
+    startAutoTune();
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
+  } else if (t.endsWith("/cmd/accept_tune")) {
+    command = "accept_tune";
+    accepted = true;
+    if (gRt.autoTunePhase != AutoTunePhase::PendingAccept) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
+    gCfg.prevPidKp = gCfg.pidKp;
+    gCfg.prevPidKi = gCfg.pidKi;
+    gCfg.prevPidKd = gCfg.pidKd;
+    gCfg.pidKp = gRt.currentKp;
+    gCfg.pidKi = gRt.currentKi;
+    gCfg.pidKd = gRt.currentKd;
+    gCfg.tuneQualityScore = gRt.autoTuneQualityScore;
+    gRt.previousKp = gCfg.prevPidKp;
+    gRt.previousKi = gCfg.prevPidKi;
+    gRt.previousKd = gCfg.prevPidKd;
+    gRt.autoTunePhase = AutoTunePhase::Complete;
+    needsStorageSave = true;
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
+  } else {
+    command = "unknown";
+    accepted = false;
+    applied = false;
+    reason = "unsupported_command";
+    finishAck();
+    return;
   }
+
+  if (needsStorageSave) gStorage.save(gCfg);
+  if (needsDisplayRefresh) gDisplay.invalidateAll();
+  finishAck();
 }
 
 bool pointInRect(int x, int y, int rx, int ry, int rw, int rh) {
@@ -497,6 +615,9 @@ void setup() {
   gStorage.load(gCfg);
   gRt.currentSetpointC = gCfg.localSetpointC;
   gRt.activeStageMinutes = gCfg.manualStageMinutes;
+  gRt.desiredSetpointC = gCfg.localSetpointC;
+  gRt.desiredMinutes = gCfg.manualStageMinutes;
+  strlcpy(gRt.desiredRunAction, "stop", sizeof(gRt.desiredRunAction));
   gRt.controlMode = (gCfg.controlLock == ControlLock::RemoteOnly) ? ControlMode::Remote : ControlMode::Local;
   gRt.uiMode = UiMode::SetpointAdjust;
 
