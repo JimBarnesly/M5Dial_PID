@@ -15,6 +15,8 @@ constexpr float STAGE_AT_TEMP_BAND_C = 0.3f;
 constexpr float DEFAULT_OVER_TEMP_C = 99.0f;
 constexpr float SENSOR_FAULT_LOW_C = -10.0f;
 constexpr float SENSOR_FAULT_HIGH_C = 150.0f;
+constexpr float DEFAULT_TEMP_SMOOTHING_ALPHA = 0.25f;
+constexpr float DEFAULT_TEMP_MAX_RATE_C_PER_SEC = 3.0f;
 
 constexpr uint32_t PID_WINDOW_MS = 2000;
 constexpr float PID_KP = 18.0f;

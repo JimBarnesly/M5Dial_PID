@@ -72,6 +72,8 @@ struct PersistentConfig {
   uint32_t manualStageMinutes {Config::DEFAULT_STAGE_MINUTES};
   float stageStartBandC {Config::DEFAULT_STAGE_START_BAND_C};
   float overTempC {Config::DEFAULT_OVER_TEMP_C};
+  float tempOffsetC {0.0f};
+  float tempSmoothingAlpha {Config::DEFAULT_TEMP_SMOOTHING_ALPHA};
   char mqttHost[64] {"192.168.1.10"};
   uint16_t mqttPort {Config::MQTT_PORT_PLAIN};
   char mqttUser[32] {""};
@@ -98,12 +100,14 @@ struct RuntimeState {
   UiMode uiMode {UiMode::SetpointAdjust};
 
   float currentTempC {NAN};
+  float currentRawTempC {NAN};
   float currentSetpointC {Config::DEFAULT_SETPOINT_C};
   float heaterOutputPct {0.0f};
 
   bool wifiConnected {false};
   bool mqttConnected {false};
   bool sensorHealthy {false};
+  bool tempPlausible {true};
   bool heatingEnabled {false};
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};

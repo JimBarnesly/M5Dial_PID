@@ -18,6 +18,8 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.stageStartBandC = 2.0f;
   cfg.manualStageMinutes = 60;
   cfg.overTempC = 99.0f;
+  cfg.tempOffsetC = 0.0f;
+  cfg.tempSmoothingAlpha = Config::DEFAULT_TEMP_SMOOTHING_ALPHA;
   strncpy(cfg.mqttHost, "192.168.1.10", sizeof(cfg.mqttHost)-1);
   cfg.mqttPort = Config::MQTT_PORT_PLAIN;
   cfg.mqttUseTls = false;
@@ -56,6 +58,8 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.stageStartBandC = doc["stageStartBandC"] | cfg.stageStartBandC;
   cfg.manualStageMinutes = doc["manualStageMinutes"] | cfg.manualStageMinutes;
   cfg.overTempC = doc["overTempC"] | cfg.overTempC;
+  cfg.tempOffsetC = doc["tempOffsetC"] | cfg.tempOffsetC;
+  cfg.tempSmoothingAlpha = doc["tempSmoothingAlpha"] | cfg.tempSmoothingAlpha;
   cfg.controlLock = static_cast<ControlLock>((uint8_t)(doc["controlLock"] | (uint8_t)cfg.controlLock));
   strlcpy(cfg.mqttHost, doc["mqttHost"] | cfg.mqttHost, sizeof(cfg.mqttHost));
   cfg.mqttPort = doc["mqttPort"] | cfg.mqttPort;
@@ -124,6 +128,8 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["stageStartBandC"] = cfg.stageStartBandC;
   doc["manualStageMinutes"] = cfg.manualStageMinutes;
   doc["overTempC"] = cfg.overTempC;
+  doc["tempOffsetC"] = cfg.tempOffsetC;
+  doc["tempSmoothingAlpha"] = cfg.tempSmoothingAlpha;
   doc["controlLock"] = (uint8_t)cfg.controlLock;
   doc["mqttHost"] = cfg.mqttHost;
   doc["mqttPort"] = cfg.mqttPort;

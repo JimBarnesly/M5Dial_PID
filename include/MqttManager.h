@@ -11,14 +11,7 @@ public:
   void begin(PersistentConfig* cfg, RuntimeState* rt);
   void update();
   void publishStatus(const RuntimeState& rt, const char* activeStageName, uint32_t remainingSec);
-  void publishShadow(const RuntimeState& rt, uint32_t remainingSec);
-  void publishCommandAck(const char* cmdId,
-                         const char* command,
-                         bool accepted,
-                         bool applied,
-                         const char* reason,
-                         const RuntimeState& rt,
-                         uint32_t remainingSec);
+  void publishCalibrationStatus(const PersistentConfig& cfg, const RuntimeState& rt);
   void publishProfileCompleteIfPending(RuntimeState& rt);
   bool isConnected();
 
