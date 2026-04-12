@@ -301,52 +301,98 @@ void handleCommands(const char* topic, const char* payload) {
       gDisplay.invalidateAll();
       accepted = true;
     }
+    gRt.controlMode = ControlMode::Remote;
+    gCfg.localSetpointC = requestedSetpoint;
+    gRt.currentSetpointC = gCfg.localSetpointC;
+    gRt.desiredSetpointC = requestedSetpoint;
+    needsStorageSave = true;
+    needsDisplayRefresh = true;
+    applied = true;
+    reason = "applied";
   } else if (t.endsWith("/cmd/minutes")) {
+    command = "minutes";
     int32_t mins = doc["minutes"] | atoi(payload);
-    if (mins < 0) mins = 0;
-    if (mins > 480) mins = 480;
+    gRt.desiredMinutes = mins < 0 ? 0 : static_cast<uint32_t>(mins);
+    accepted = true;
+    if (mins < 0 || mins > 480) {
+      applied = false;
+      reason = "invalid_range_minutes";
+      finishAck();
+      return;
+    }
     gCfg.manualStageMinutes = static_cast<uint32_t>(mins);
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
     gStorage.save(gCfg);
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/start")) {
+    command = "start";
+    strlcpy(gRt.desiredRunAction, "start", sizeof(gRt.desiredRunAction));
+    accepted = true;
+    if (gRt.runState == RunState::Running || gRt.runState == RunState::AutoTune || gRt.runState == RunState::Fault) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     gStages.startProfile(0);
     gCompletionHandled = false;
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/pause")) {
+    command = "pause";
+    strlcpy(gRt.desiredRunAction, "pause", sizeof(gRt.desiredRunAction));
+    accepted = true;
+    if (gRt.runState != RunState::Running) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     gStages.pause();
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/stop")) {
+    command = "stop";
+    strlcpy(gRt.desiredRunAction, "stop", sizeof(gRt.desiredRunAction));
+    accepted = true;
+    if (gRt.runState == RunState::AutoTune) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     gStages.stop();
     gCompletionHandled = false;
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/reset_alarm")) {
+    command = "reset_alarm";
+    accepted = true;
     gAlarm.clearAlarm();
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/start_autotune")) {
+    command = "start_autotune";
+    accepted = true;
+    if (!gRt.sensorHealthy || isnan(gRt.currentTempC) || gRt.runState == RunState::Running || gRt.runState == RunState::Paused) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
+    }
     startAutoTune();
     gDisplay.invalidateAll();
     accepted = true;
   } else if (t.endsWith("/cmd/accept_tune")) {
-    if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
-      gCfg.prevPidKp = gCfg.pidKp;
-      gCfg.prevPidKi = gCfg.pidKi;
-      gCfg.prevPidKd = gCfg.pidKd;
-      gCfg.pidKp = gRt.currentKp;
-      gCfg.pidKi = gRt.currentKi;
-      gCfg.pidKd = gRt.currentKd;
-      gCfg.tuneQualityScore = gRt.autoTuneQualityScore;
-      gRt.previousKp = gCfg.prevPidKp;
-      gRt.previousKi = gCfg.prevPidKi;
-      gRt.previousKd = gCfg.prevPidKd;
-      gRt.autoTunePhase = AutoTunePhase::Complete;
-      gStorage.save(gCfg);
+    command = "accept_tune";
+    accepted = true;
+    if (gRt.autoTunePhase != AutoTunePhase::PendingAccept) {
+      applied = false;
+      reason = "wrong_run_state";
+      finishAck();
+      return;
     }
     gDisplay.invalidateAll();
     accepted = true;
@@ -355,6 +401,10 @@ void handleCommands(const char* topic, const char* payload) {
   if (accepted) {
     gRt.lastAcceptedRemoteCommandAtMs = millis();
   }
+
+  if (needsStorageSave) gStorage.save(gCfg);
+  if (needsDisplayRefresh) gDisplay.invalidateAll();
+  finishAck();
 }
 
 bool pointInRect(int x, int y, int rx, int ry, int rw, int rh) {
@@ -541,6 +591,9 @@ void setup() {
   gStorage.load(gCfg);
   gRt.currentSetpointC = gCfg.localSetpointC;
   gRt.activeStageMinutes = gCfg.manualStageMinutes;
+  gRt.desiredSetpointC = gCfg.localSetpointC;
+  gRt.desiredMinutes = gCfg.manualStageMinutes;
+  strlcpy(gRt.desiredRunAction, "stop", sizeof(gRt.desiredRunAction));
   gRt.controlMode = (gCfg.controlLock == ControlLock::RemoteOnly) ? ControlMode::Remote : ControlMode::Local;
   gRt.uiMode = UiMode::SetpointAdjust;
   gRt.lastValidMqttConnectionAtMs = millis();

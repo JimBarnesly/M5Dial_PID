@@ -63,9 +63,41 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.prevPidKi = doc["prevPidKi"] | cfg.prevPidKi;
   cfg.prevPidKd = doc["prevPidKd"] | cfg.prevPidKd;
   cfg.tuneQualityScore = doc["tuneQualityScore"] | cfg.tuneQualityScore;
+  cfg.profileCount = static_cast<uint8_t>(doc["profileCount"] | cfg.profileCount);
+  cfg.activeProfileIndex = static_cast<uint8_t>(doc["activeProfileIndex"] | cfg.activeProfileIndex);
 
-  cfg.profileCount = 0;
-  cfg.activeProfileIndex = 0;
+  JsonArray profiles = doc["profiles"].as<JsonArray>();
+  if (!profiles.isNull()) {
+    cfg.profileCount = 0;
+    for (JsonObject p : profiles) {
+      if (cfg.profileCount >= Config::MAX_PROFILES) break;
+      BrewProfile& profile = cfg.profiles[cfg.profileCount];
+      strlcpy(profile.name, p["name"] | "PROFILE", sizeof(profile.name));
+      profile.stageCount = static_cast<uint8_t>(p["stageCount"] | 0);
+      if (profile.stageCount > Config::MAX_STAGES) profile.stageCount = Config::MAX_STAGES;
+
+      JsonArray stages = p["stages"].as<JsonArray>();
+      uint8_t loadedStages = 0;
+      if (!stages.isNull()) {
+        for (JsonObject s : stages) {
+          if (loadedStages >= profile.stageCount || loadedStages >= Config::MAX_STAGES) break;
+          BrewStage& stage = profile.stages[loadedStages];
+          strlcpy(stage.name, s["name"] | "STAGE", sizeof(stage.name));
+          stage.targetC = s["targetC"] | 0.0f;
+          stage.holdSeconds = s["holdSeconds"] | 0UL;
+          ++loadedStages;
+        }
+      }
+      profile.stageCount = loadedStages;
+      ++cfg.profileCount;
+    }
+  }
+
+  if (cfg.profileCount == 0) {
+    cfg.activeProfileIndex = 0;
+  } else if (cfg.activeProfileIndex >= cfg.profileCount) {
+    cfg.activeProfileIndex = static_cast<uint8_t>(cfg.profileCount - 1);
+  }
   return true;
 }
 
@@ -89,7 +121,26 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["prevPidKi"] = cfg.prevPidKi;
   doc["prevPidKd"] = cfg.prevPidKd;
   doc["tuneQualityScore"] = cfg.tuneQualityScore;
-  doc["activeProfileIndex"] = 0;
+  doc["profileCount"] = cfg.profileCount;
+  doc["activeProfileIndex"] = cfg.activeProfileIndex;
+
+  JsonArray profiles = doc["profiles"].to<JsonArray>();
+  const uint8_t profileCount = (cfg.profileCount > Config::MAX_PROFILES) ? Config::MAX_PROFILES : cfg.profileCount;
+  for (uint8_t i = 0; i < profileCount; ++i) {
+    const BrewProfile& profile = cfg.profiles[i];
+    JsonObject p = profiles.add<JsonObject>();
+    p["name"] = profile.name;
+    const uint8_t stageCount = (profile.stageCount > Config::MAX_STAGES) ? Config::MAX_STAGES : profile.stageCount;
+    p["stageCount"] = stageCount;
+    JsonArray stages = p["stages"].to<JsonArray>();
+    for (uint8_t j = 0; j < stageCount; ++j) {
+      const BrewStage& stage = profile.stages[j];
+      JsonObject s = stages.add<JsonObject>();
+      s["name"] = stage.name;
+      s["targetC"] = stage.targetC;
+      s["holdSeconds"] = stage.holdSeconds;
+    }
+  }
 
 
   String out;

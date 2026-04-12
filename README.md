@@ -28,3 +28,89 @@ V4 notes:
 - static chrome is drawn once, with only changed regions refreshed
 - ring follows the outer thin countdown layout from the Stitch mock
 - bottom icons are rendered with primitives instead of text glyphs for runtime stability
+
+## MQTT topic schema (Node-RED integration)
+
+Base topic: `brew/hlt`
+
+### Command topics (subscribe/publish from Node-RED to device)
+
+- `brew/hlt/cmd/setpoint`  
+  Payload example:
+  ```json
+  {"cmdId":"nr-1001","setpointC":67.5}
+  ```
+- `brew/hlt/cmd/minutes`  
+  Payload example:
+  ```json
+  {"cmdId":"nr-1002","minutes":90}
+  ```
+- `brew/hlt/cmd/start`
+- `brew/hlt/cmd/pause`
+- `brew/hlt/cmd/stop`
+- `brew/hlt/cmd/reset_alarm`
+- `brew/hlt/cmd/start_autotune`
+- `brew/hlt/cmd/accept_tune`
+
+For action commands (no scalar value), a minimal payload with only `cmdId` is enough:
+```json
+{"cmdId":"nr-1003"}
+```
+
+### Command acknowledgement topic (device -> Node-RED)
+
+- `brew/hlt/event/cmd_ack` (non-retained)
+
+Payload schema:
+```json
+{
+  "cmdId": "nr-1003",
+  "command": "start",
+  "accepted": true,
+  "applied": false,
+  "reason": "wrong_run_state",
+  "reported": {
+    "runState": "running",
+    "setpointC": 67.5,
+    "effectiveTimerSec": 5100
+  }
+}
+```
+
+`reason` values include:
+- `applied`
+- `invalid_json`
+- `unsupported_command`
+- `control_lock_local_only`
+- `invalid_range_setpoint`
+- `invalid_range_minutes`
+- `wrong_run_state`
+
+### Device shadow topic (device -> Node-RED)
+
+- `brew/hlt/shadow` (retained)
+
+Payload schema:
+```json
+{
+  "desired": {
+    "setpointC": 67.5,
+    "minutes": 90,
+    "runAction": "start"
+  },
+  "reported": {
+    "runState": "running",
+    "setpointC": 67.5,
+    "effectiveTimerSec": 5100,
+    "stageTimerStarted": true
+  }
+}
+```
+
+Shadow intent:
+- `desired.*` is the latest requested operator intent from remote commands.
+- `reported.*` is what the controller is currently doing at runtime.
+
+### Existing status topic (device -> Node-RED)
+
+- `brew/hlt/status` (retained, full telemetry snapshot)
