@@ -31,11 +31,12 @@ V4 notes:
 
 ## Secure commissioning and minimum safe defaults
 
-This firmware now avoids shipping fixed AP credentials and supports secure MQTT transport options.
+This firmware uses a fixed onboarding AP password for easier field setup and supports secure MQTT transport options.
 
 ### 1) First boot / Wi-Fi onboarding
 - On first boot (or after clearing Wi-Fi credentials), the device starts a WiFiManager portal AP.
-- The AP SSID and password are generated per-device from hardware identity (no shared default password).
+- The AP SSID is generated per-device from hardware identity.
+- The AP password is fixed to `BrewCore12` so installers can connect without serial access.
 - In serial debug logs, the AP password is masked so full credentials are not exposed.
 
 ### 2) MQTT security modes
