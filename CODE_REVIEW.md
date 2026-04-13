@@ -66,3 +66,4 @@ These modules now depend on `CoreConfig` rather than the mixed `Config` namespac
 - Extended `WifiManagerWrapper` captive portal with custom fields for MQTT host/port and surfaced getter APIs for pending config updates.
 - `main.cpp` now applies/saves MQTT host/port updates from the portal into persistent config and re-publishes effective config when connected.
 - Added remote command `/cmd/reset_wifi` and a local boot-time hold gesture (BtnA held for ~3s) to clear Wi-Fi settings, since the hardware reset button itself cannot be used as an application-level gesture.
+- Fixed reboot risk during non-blocking portal use by making WiFiManager custom parameters persistent members instead of stack locals.

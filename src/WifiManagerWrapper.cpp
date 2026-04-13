@@ -30,19 +30,24 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   }
   snprintf(_mqttPort, sizeof(_mqttPort), "%u", defaultMqttPort);
 
-  WiFiManagerParameter mqttHostParam("mqtt_host", "MQTT host", _mqttHost, sizeof(_mqttHost));
-  WiFiManagerParameter mqttPortParam("mqtt_port", "MQTT port", _mqttPort, sizeof(_mqttPort));
+  if (!_mqttHostParam) {
+    _mqttHostParam = new WiFiManagerParameter("mqtt_host", "MQTT host", _mqttHost, sizeof(_mqttHost));
+  }
+  if (!_mqttPortParam) {
+    _mqttPortParam = new WiFiManagerParameter("mqtt_port", "MQTT port", _mqttPort, sizeof(_mqttPort));
+  }
 
   buildPortalCredentials();
   gActiveWifiWrapper = this;
-  _wm.addParameter(&mqttHostParam);
-  _wm.addParameter(&mqttPortParam);
+  _wm.setDebugOutput(true);
+  _wm.addParameter(_mqttHostParam);
+  _wm.addParameter(_mqttPortParam);
   _wm.setSaveConfigCallback(WifiManagerWrapper::onSaveConfigCallback);
   _wm.setConfigPortalBlocking(false);
   _wm.setConfigPortalTimeout(portalTimeoutSec);
   _wm.autoConnect(_apName, _apPass);
-  strlcpy(_mqttHost, mqttHostParam.getValue(), sizeof(_mqttHost));
-  strlcpy(_mqttPort, mqttPortParam.getValue(), sizeof(_mqttPort));
+  strlcpy(_mqttHost, _mqttHostParam->getValue(), sizeof(_mqttHost));
+  strlcpy(_mqttPort, _mqttPortParam->getValue(), sizeof(_mqttPort));
   applyPortalValues();
   _started = true;
 }

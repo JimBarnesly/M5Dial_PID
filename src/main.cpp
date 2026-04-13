@@ -390,6 +390,7 @@ static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
     changed = true;
   }
   if (!changed) return;
+  DBG_PRINTF("WiFi portal config changed mqttHost=%s mqttPort=%u\n", gCfg.mqttHost, gCfg.mqttPort);
   if (persist) gStorage.save(gCfg);
   if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
 }
@@ -1399,6 +1400,10 @@ void setup() {
       logRuntimeEvent("WiFi settings reset (local boot hold)");
     }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
+    DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
+               gCfg.mqttHost,
+               gCfg.mqttPort,
+               static_cast<unsigned>(gCfg.wifiPortalTimeoutSec));
     if (gWifi.hasPendingConfigUpdate()) {
       applyWifiPortalNetworkConfig(true, false);
       gWifi.clearPendingConfigUpdate();

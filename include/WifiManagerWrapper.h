@@ -27,4 +27,6 @@ private:
   char _apPass[20] {};
   char _mqttHost[64] {"192.168.1.10"};
   char _mqttPort[8] {"1883"};
+  WiFiManagerParameter* _mqttHostParam {nullptr};
+  WiFiManagerParameter* _mqttPortParam {nullptr};
 };
