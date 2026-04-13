@@ -145,6 +145,7 @@ struct RuntimeState {
   float previousKd {CoreConfig::PID_KD};
 
   AlarmCode activeAlarm {AlarmCode::None};
+  bool alarmAcknowledged {false};
   char alarmText[64] {"OK"};
   char settingsLabel[24] {""};
   char settingsValue[48] {""};

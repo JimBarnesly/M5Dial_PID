@@ -131,6 +131,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["mqttDisabledEffective"] = debugMqttDisabledEffective();
   doc["networkMode"] = debugNetworkModeLabel();
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
+  doc["alarmAcknowledged"] = rt.alarmAcknowledged;
   doc["alarmText"] = rt.alarmText;
   doc["activeStage"] = activeStageName ? activeStageName : "";
   doc["remainingSec"] = remainingSec;

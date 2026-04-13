@@ -17,6 +17,7 @@
 #include "MqttManager.h"
 #include "DisplayManager.h"
 #include "DebugControl.h"
+#include "platform/m5dial/M5DialBuzzer.h"
 
 bool gDebugEnabled = true;
 bool gDebugDisableWifi = false;
@@ -33,7 +34,8 @@ RuntimeState gRt;
 TempSensor gTempSensor(Config::PIN_ONEWIRE);
 PidController gPid;
 HeaterOutput gHeater(Config::PIN_HEATER, Config::HEATER_ACTIVE_HIGH);
-AlarmManager gAlarm(Config::PIN_BUZZER);
+AlarmManager gAlarm;
+M5DialBuzzer gBuzzer(Config::PIN_BUZZER);
 StorageManager gStorage;
 StageManager gStages;
 WifiManagerWrapper gWifi;
@@ -411,16 +413,17 @@ static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = n
 
 void syncAlarmFromManager() {
   gRt.activeAlarm = gAlarm.getAlarm();
+  gRt.alarmAcknowledged = gAlarm.isAcknowledged();
   strlcpy(gRt.alarmText, gAlarm.getText(), sizeof(gRt.alarmText));
 }
 
 void clearFaultIfRecoverable() {
-  if (gAlarm.getAlarm() == AlarmCode::SensorFault && gRt.sensorHealthy) gAlarm.clearAlarm();
-  if (gAlarm.getAlarm() == AlarmCode::OverTemp && gRt.currentTempC < (gCfg.overTempC - 1.0f)) gAlarm.clearAlarm();
+  if (gAlarm.getAlarm() == AlarmCode::SensorFault && gRt.sensorHealthy) gAlarm.clearAlarm(AlarmControlSource::System);
+  if (gAlarm.getAlarm() == AlarmCode::OverTemp && gRt.currentTempC < (gCfg.overTempC - 1.0f)) gAlarm.clearAlarm(AlarmControlSource::System);
   if (gAlarm.getAlarm() == AlarmCode::HeatingIneffective && !isnan(gHeatEvalStartTemp) && gRt.currentTempC >= gHeatEvalStartTemp + Config::MIN_EXPECTED_RISE_C) {
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::System);
   }
-  if (gAlarm.getAlarm() == AlarmCode::MqttOffline && gRt.mqttConnected) gAlarm.clearAlarm();
+  if (gAlarm.getAlarm() == AlarmCode::MqttOffline && gRt.mqttConnected) gAlarm.clearAlarm(AlarmControlSource::System);
   syncAlarmFromManager();
 }
 
@@ -904,9 +907,27 @@ void handleCommands(const char* topic, const char* payload) {
       finishAck();
       return;
     }
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::RemoteMqtt);
     syncAlarmFromManager();
-    logRuntimeEvent("Alarm reset");
+    logRuntimeEvent("Alarm reset (remote)");
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/ack_alarm")) {
+    command = "ack_alarm";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
+    if (!gAlarm.acknowledge(AlarmControlSource::RemoteMqtt)) {
+      applied = false;
+      reason = "ack_not_allowed";
+      finishAck();
+      return;
+    }
+    syncAlarmFromManager();
+    logRuntimeEvent("Alarm acknowledged (remote)");
     gDisplay.invalidateAll();
   } else if (t.endsWith("/cmd/start_autotune")) {
     command = "start_autotune";
@@ -1015,7 +1036,7 @@ void handleTouch() {
 
   if (gRt.activeAlarm != AlarmCode::None && pointInRect(t.x, t.y, 40, 42, 160, 24)) {
     DBG_PRINTLN("Touch reset alarm");
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::LocalUi);
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     M5Dial.Speaker.tone(3200, 20);
@@ -1094,7 +1115,7 @@ void processInput() {
 
   if (gRt.activeAlarm != AlarmCode::None && gDisplay.wasAlarmPillTouched()) {
     DBG_PRINTLN("Display alarm-pill reset");
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::LocalUi);
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     M5Dial.Speaker.tone(3200, 20);
@@ -1322,7 +1343,10 @@ void setup() {
   gRt.previousKd = gCfg.prevPidKd;
   gRt.autoTuneQualityScore = gCfg.tuneQualityScore;
   gHeater.begin();
+  gBuzzer.begin();
+  gAlarm.setSignalHandler([](bool on) { gBuzzer.set(on); });
   gAlarm.begin();
+  gAlarm.setLocalUiAlarmControlEnabled(true);
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {

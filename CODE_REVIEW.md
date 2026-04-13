@@ -49,3 +49,10 @@ These modules now depend on `CoreConfig` rather than the mixed `Config` namespac
 - M5Dial-specific constants now live in a dedicated platform header.
 - Existing app behavior remains intact through `Config.h` compatibility exports.
 - This structure is ready for a future `platform/m5atomswitch/*` adapter while reusing the same core managers.
+
+## Follow-up extraction for alarm control (2026-04-13 update)
+- Alarm control paths were updated to be source-aware (`LocalUi`, `RemoteMqtt`, `System`) in `AlarmManager`.
+- Added local UI alarm-control gating so non-screen devices can disable local clear/ack behavior.
+- Added MQTT command support for remote alarm acknowledgment (`/cmd/ack_alarm`) while keeping `/cmd/reset_alarm` for remote clears.
+- Added `alarmAcknowledged` status publication field so Node-RED can distinguish active-vs-acknowledged alarm state.
+- Moved buzzer GPIO signaling out of `AlarmManager` and into a new M5Dial adapter (`M5DialBuzzer`) so `AlarmManager` is now transport/device agnostic.
