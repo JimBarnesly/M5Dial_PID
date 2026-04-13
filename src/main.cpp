@@ -2,6 +2,7 @@
 #include <M5Dial.h>
 #include <ArduinoJson.h>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include "Config.h"
@@ -461,9 +462,23 @@ void handleCommands(const char* topic, const char* payload) {
   bool accepted = false;
   bool applied = true;
   const char* reason = "ok";
-  bool needsStorageSave = false;
-  bool needsDisplayRefresh = false;
   const char* cmdId = doc["cmdId"] | "";
+  const bool controlLockedLocalOnly = gCfg.controlLock == ControlLock::LocalOnly;
+
+  auto parsePayloadFloat = [&](float fallback) -> float {
+    char* endPtr = nullptr;
+    const float parsed = strtof(payload, &endPtr);
+    if (endPtr != payload && endPtr && *endPtr == '\0' && isfinite(parsed)) return parsed;
+    return fallback;
+  };
+
+  auto parsePayloadInt = [&](int fallback) -> int {
+    char* endPtr = nullptr;
+    const long parsed = strtol(payload, &endPtr, 10);
+    if (endPtr != payload && endPtr && *endPtr == '\0') return static_cast<int>(parsed);
+    return fallback;
+  };
+
   auto finishAck = [&]() {
     gMqtt.publishCommandAck(cmdId,
                             command,
@@ -475,113 +490,235 @@ void handleCommands(const char* topic, const char* payload) {
   };
 
   if (t.endsWith("/cmd/setpoint")) {
-    if (gCfg.controlLock != ControlLock::LocalOnly &&
-        (gRt.uiMode == UiMode::SetpointAdjust || gRt.runState == RunState::Idle || gRt.runState == RunState::Complete)) {
-      gRt.controlMode = ControlMode::Remote;
-      gCfg.localSetpointC = doc["setpointC"] | atof(payload);
-      gRt.currentSetpointC = gCfg.localSetpointC;
-      gStorage.save(gCfg);
-      gDisplay.invalidateAll();
-      accepted = true;
+    command = "setpoint";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else if (gRt.uiMode == UiMode::SetpointAdjust || gRt.runState == RunState::Idle || gRt.runState == RunState::Complete) {
+      const float requested = doc["setpointC"] | parsePayloadFloat(NAN);
+      if (!isfinite(requested) || requested < 20.0f || requested > 100.0f) {
+        applied = false;
+        reason = "invalid_range_setpoint";
+      } else {
+        gRt.controlMode = ControlMode::Remote;
+        gCfg.localSetpointC = requested;
+        gRt.currentSetpointC = gCfg.localSetpointC;
+        gStorage.save(gCfg);
+        gDisplay.invalidateAll();
+      }
+    } else {
+      applied = false;
+      reason = "wrong_run_state";
     }
   } else if (t.endsWith("/cmd/over_temp")) {
-    const float v = doc["overTempC"] | atof(payload);
-    if (isfinite(v) && v >= 20.0f && v <= 140.0f) {
-      gCfg.overTempC = v;
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "over_temp";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const float v = doc["overTempC"] | parsePayloadFloat(NAN);
+      if (isfinite(v) && v >= 20.0f && v <= 140.0f) {
+        gCfg.overTempC = v;
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_range_over_temp";
+      }
     }
   } else if (t.endsWith("/cmd/control_lock")) {
-    int lockRaw = doc["controlLock"] | atoi(payload);
-    if (lockRaw >= 0 && lockRaw <= 2) {
-      gCfg.controlLock = static_cast<ControlLock>(lockRaw);
-      if (gCfg.controlLock == ControlLock::RemoteOnly) gRt.controlMode = ControlMode::Remote;
-      else if (gRt.controlMode == ControlMode::Remote) gRt.controlMode = ControlMode::Local;
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "control_lock";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      int lockRaw = doc["controlLock"] | parsePayloadInt(-1);
+      if (lockRaw >= 0 && lockRaw <= 2) {
+        gCfg.controlLock = static_cast<ControlLock>(lockRaw);
+        if (gCfg.controlLock == ControlLock::RemoteOnly) gRt.controlMode = ControlMode::Remote;
+        else if (gRt.controlMode == ControlMode::Remote) gRt.controlMode = ControlMode::Local;
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_control_lock";
+      }
     }
   } else if (t.endsWith("/cmd/mqtt_host")) {
-    const char* host = doc["host"] | payload;
-    if (host && strlen(host) > 0 && strlen(host) < sizeof(gCfg.mqttHost)) {
-      strlcpy(gCfg.mqttHost, host, sizeof(gCfg.mqttHost));
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "mqtt_host";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const char* host = doc["host"] | payload;
+      if (host && strlen(host) > 0 && strlen(host) < sizeof(gCfg.mqttHost)) {
+        strlcpy(gCfg.mqttHost, host, sizeof(gCfg.mqttHost));
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_host";
+      }
     }
   } else if (t.endsWith("/cmd/mqtt_port")) {
-    int port = doc["port"] | atoi(payload);
-    if (port > 0 && port <= 65535) {
-      gCfg.mqttPort = static_cast<uint16_t>(port);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "mqtt_port";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      int port = doc["port"] | parsePayloadInt(-1);
+      if (port > 0 && port <= 65535) {
+        gCfg.mqttPort = static_cast<uint16_t>(port);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_port";
+      }
     }
   } else if (t.endsWith("/cmd/mqtt_timeout")) {
-    const int timeout = doc["seconds"] | atoi(payload);
-    if (timeout >= 0 && timeout <= 3600) {
-      gCfg.mqttCommsTimeoutSec = static_cast<uint16_t>(timeout);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "mqtt_timeout";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const int timeout = doc["seconds"] | parsePayloadInt(-1);
+      if (timeout >= 0 && timeout <= 3600) {
+        gCfg.mqttCommsTimeoutSec = static_cast<uint16_t>(timeout);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_timeout";
+      }
     }
   } else if (t.endsWith("/cmd/mqtt_fallback")) {
-    int mode = doc["mode"] | atoi(payload);
-    if (mode >= static_cast<int>(MqttFallbackMode::HoldSetpoint) &&
-        mode <= static_cast<int>(MqttFallbackMode::StopHeater)) {
-      gCfg.mqttFallbackMode = static_cast<MqttFallbackMode>(mode);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "mqtt_fallback";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      int mode = doc["mode"] | parsePayloadInt(-1);
+      if (mode >= static_cast<int>(MqttFallbackMode::HoldSetpoint) &&
+          mode <= static_cast<int>(MqttFallbackMode::StopHeater)) {
+        gCfg.mqttFallbackMode = static_cast<MqttFallbackMode>(mode);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_fallback";
+      }
     }
   } else if (t.endsWith("/cmd/wifi_portal_timeout")) {
-    const int timeout = doc["seconds"] | atoi(payload);
-    if (timeout >= 30 && timeout <= 1800) {
-      gCfg.wifiPortalTimeoutSec = static_cast<uint16_t>(timeout);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "wifi_portal_timeout";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const int timeout = doc["seconds"] | parsePayloadInt(-1);
+      if (timeout >= 30 && timeout <= 1800) {
+        gCfg.wifiPortalTimeoutSec = static_cast<uint16_t>(timeout);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_wifi_timeout";
+      }
     }
   } else if (t.endsWith("/cmd/pid")) {
-    const float kp = doc["kp"] | gCfg.pidKp;
-    const float ki = doc["ki"] | gCfg.pidKi;
-    const float kd = doc["kd"] | gCfg.pidKd;
-    if (candidateWithinGuardrails(kp, ki, kd)) {
-      gCfg.pidKp = kp;
-      gCfg.pidKi = ki;
-      gCfg.pidKd = kd;
-      applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "pid";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const float kp = doc["kp"] | gCfg.pidKp;
+      const float ki = doc["ki"] | gCfg.pidKi;
+      const float kd = doc["kd"] | gCfg.pidKd;
+      if (candidateWithinGuardrails(kp, ki, kd)) {
+        gCfg.pidKp = kp;
+        gCfg.pidKi = ki;
+        gCfg.pidKd = kd;
+        applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_pid";
+      }
     }
   } else if (t.endsWith("/cmd/pid_kp")) {
-    const float kp = doc["kp"] | atof(payload);
-    if (finitePositive(kp) && kp <= 60.0f) {
-      gCfg.pidKp = kp;
-      applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "pid_kp";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const float kp = doc["kp"] | parsePayloadFloat(NAN);
+      if (finitePositive(kp) && kp <= 60.0f) {
+        gCfg.pidKp = kp;
+        applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_pid_kp";
+      }
     }
   } else if (t.endsWith("/cmd/pid_ki")) {
-    const float ki = doc["ki"] | atof(payload);
-    if (finitePositive(ki) && ki <= 2.0f) {
-      gCfg.pidKi = ki;
-      applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "pid_ki";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const float ki = doc["ki"] | parsePayloadFloat(NAN);
+      if (finitePositive(ki) && ki <= 2.0f) {
+        gCfg.pidKi = ki;
+        applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_pid_ki";
+      }
     }
   } else if (t.endsWith("/cmd/pid_kd")) {
-    const float kd = doc["kd"] | atof(payload);
-    if (finitePositive(kd) && kd <= 80.0f) {
-      gCfg.pidKd = kd;
-      applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
-      gStorage.save(gCfg);
-      if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-      gDisplay.invalidateAll();
+    command = "pid_kd";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const float kd = doc["kd"] | parsePayloadFloat(NAN);
+      if (finitePositive(kd) && kd <= 80.0f) {
+        gCfg.pidKd = kd;
+        applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_pid_kd";
+      }
     }
   } else if (t.endsWith("/cmd/get_config")) {
     command = "get_config";
@@ -594,6 +731,12 @@ void handleCommands(const char* topic, const char* payload) {
   } else if (t.endsWith("/cmd/profile_select")) {
     command = "profile_select";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     const int index = doc["index"] | -1;
     if (index < 0 || index >= gCfg.profileCount) {
       applied = false;
@@ -608,6 +751,12 @@ void handleCommands(const char* topic, const char* payload) {
   } else if (t.endsWith("/cmd/profile_start")) {
     command = "profile_start";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     const int index = doc["index"] | static_cast<int>(gCfg.activeProfileIndex);
     if (index < 0 || index >= gCfg.profileCount) {
       applied = false;
@@ -624,6 +773,12 @@ void handleCommands(const char* topic, const char* payload) {
   } else if (t.endsWith("/cmd/profile_delete")) {
     command = "profile_delete";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     const int index = doc["index"] | -1;
     if (index < 0 || index >= gCfg.profileCount) {
       applied = false;
@@ -643,6 +798,12 @@ void handleCommands(const char* topic, const char* payload) {
   } else if (t.endsWith("/cmd/profile_upsert")) {
     command = "profile_upsert";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     uint8_t outIndex = 0;
     if (!upsertProfileFromJson(doc, &outIndex)) {
       applied = false;
@@ -656,24 +817,35 @@ void handleCommands(const char* topic, const char* payload) {
     gDisplay.invalidateAll();
   } else if (t.endsWith("/cmd/minutes")) {
     command = "minutes";
-    int32_t mins = doc["minutes"] | atoi(payload);
-    gRt.desiredMinutes = mins < 0 ? 0 : static_cast<uint32_t>(mins);
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
+    const int32_t mins = doc["minutes"] | parsePayloadInt(-1);
     if (mins < 0 || mins > 480) {
       applied = false;
       reason = "invalid_range_minutes";
       finishAck();
       return;
     }
+    gRt.desiredMinutes = static_cast<uint32_t>(mins);
     gCfg.manualStageMinutes = static_cast<uint32_t>(mins);
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
     gStorage.save(gCfg);
     gDisplay.invalidateAll();
-    accepted = true;
   } else if (t.endsWith("/cmd/start")) {
     command = "start";
     strlcpy(gRt.desiredRunAction, "start", sizeof(gRt.desiredRunAction));
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     if (gRt.runState == RunState::Running || gRt.runState == RunState::AutoTune || gRt.runState == RunState::Fault) {
       applied = false;
       reason = "wrong_run_state";
@@ -684,11 +856,16 @@ void handleCommands(const char* topic, const char* payload) {
     gCompletionHandled = false;
     logRuntimeEvent("Run started");
     gDisplay.invalidateAll();
-    accepted = true;
   } else if (t.endsWith("/cmd/pause")) {
     command = "pause";
     strlcpy(gRt.desiredRunAction, "pause", sizeof(gRt.desiredRunAction));
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     if (gRt.runState != RunState::Running) {
       applied = false;
       reason = "wrong_run_state";
@@ -698,11 +875,16 @@ void handleCommands(const char* topic, const char* payload) {
     gStages.pause();
     logRuntimeEvent("Run paused");
     gDisplay.invalidateAll();
-    accepted = true;
   } else if (t.endsWith("/cmd/stop")) {
     command = "stop";
     strlcpy(gRt.desiredRunAction, "stop", sizeof(gRt.desiredRunAction));
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     if (gRt.runState == RunState::AutoTune) {
       applied = false;
       reason = "wrong_run_state";
@@ -713,18 +895,28 @@ void handleCommands(const char* topic, const char* payload) {
     gCompletionHandled = false;
     logRuntimeEvent("Run stopped");
     gDisplay.invalidateAll();
-    accepted = true;
   } else if (t.endsWith("/cmd/reset_alarm")) {
     command = "reset_alarm";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     gAlarm.clearAlarm();
     syncAlarmFromManager();
     logRuntimeEvent("Alarm reset");
     gDisplay.invalidateAll();
-    accepted = true;
   } else if (t.endsWith("/cmd/start_autotune")) {
     command = "start_autotune";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     if (!gRt.sensorHealthy || isnan(gRt.currentTempC) || gRt.runState == RunState::Running || gRt.runState == RunState::Paused) {
       applied = false;
       reason = "wrong_run_state";
@@ -734,10 +926,15 @@ void handleCommands(const char* topic, const char* payload) {
     startAutoTune();
     logRuntimeEvent("Autotune started");
     gDisplay.invalidateAll();
-    accepted = true;
   } else if (t.endsWith("/cmd/accept_tune")) {
     command = "accept_tune";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     if (gRt.autoTunePhase != AutoTunePhase::PendingAccept) {
       applied = false;
       reason = "wrong_run_state";
@@ -755,6 +952,12 @@ void handleCommands(const char* topic, const char* payload) {
   } else if (t.endsWith("/cmd/reject_tune")) {
     command = "reject_tune";
     accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
     if (gRt.autoTunePhase != AutoTunePhase::PendingAccept) {
       applied = false;
       reason = "wrong_run_state";
@@ -767,7 +970,15 @@ void handleCommands(const char* topic, const char* payload) {
     logRuntimeEvent("Autotune rejected");
     gDisplay.invalidateAll();
   } else if (t.endsWith("/cmd/temp_calibration")) {
-    const float requestedOffset = doc["tempOffsetC"] | atof(payload);
+    command = "temp_calibration";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
+    const float requestedOffset = doc["tempOffsetC"] | parsePayloadFloat(gCfg.tempOffsetC);
     const bool hasSmoothing = !doc["tempSmoothingAlpha"].isNull();
     const bool hasOffset = !doc["tempOffsetC"].isNull();
 
@@ -781,6 +992,8 @@ void handleCommands(const char* topic, const char* payload) {
     gStorage.save(gCfg);
     if (gRt.mqttConnected) gMqtt.publishCalibrationStatus(gCfg, gRt);
   } else if (t.endsWith("/cmd/calibration_status")) {
+    command = "calibration_status";
+    accepted = true;
     if (gRt.mqttConnected) gMqtt.publishCalibrationStatus(gCfg, gRt);
   }
 
@@ -788,8 +1001,6 @@ void handleCommands(const char* topic, const char* payload) {
     gRt.lastAcceptedRemoteCommandAtMs = millis();
   }
 
-  if (needsStorageSave) gStorage.save(gCfg);
-  if (needsDisplayRefresh) gDisplay.invalidateAll();
   finishAck();
 }
 

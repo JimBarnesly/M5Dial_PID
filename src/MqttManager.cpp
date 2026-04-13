@@ -2,6 +2,7 @@
 #include "Config.h"
 #include "DebugControl.h"
 #include <ArduinoJson.h>
+#include <esp_system.h>
 #include <functional>
 
 MqttManager::MqttManager() : _client(_wifiClient) {}
@@ -22,6 +23,7 @@ const char* runStateText(RunState runState) {
 void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _cfg = cfg;
   _rt = rt;
+  buildClientId();
   _transportClient = &_wifiClient;
   _client.setBufferSize(1024);
   configureClientForSecurity(true);
@@ -29,6 +31,12 @@ void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _client.setCallback([this](char* topic, byte* payload, unsigned int length) {
     this->handleMessage(topic, payload, length);
   });
+}
+
+void MqttManager::buildClientId() {
+  const uint64_t efuseMac = ESP.getEfuseMac();
+  const uint32_t suffix = static_cast<uint32_t>(efuseMac & 0xFFFFFFULL);
+  snprintf(_clientId, sizeof(_clientId), "%s_%06lX", Config::MQTT_CLIENT_ID, static_cast<unsigned long>(suffix));
 }
 
 void MqttManager::setCommandCallback(CommandCallback cb) {
@@ -64,9 +72,9 @@ void MqttManager::tryReconnect() {
 
   bool ok = false;
   if (strlen(_cfg->mqttUser) > 0) {
-    ok = _client.connect(Config::MQTT_CLIENT_ID, _cfg->mqttUser, _cfg->mqttPass);
+    ok = _client.connect(_clientId, _cfg->mqttUser, _cfg->mqttPass);
   } else {
-    ok = _client.connect(Config::MQTT_CLIENT_ID);
+    ok = _client.connect(_clientId);
   }
 
   if (ok) {
