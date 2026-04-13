@@ -10,6 +10,7 @@ bool StorageManager::encryptedStorageAvailable() const {
 
 void StorageManager::begin() {
   _prefs.begin("brew-hlt", false);
+  _lastSavedJson = _prefs.getString("cfg", "");
 }
 
 void StorageManager::loadDefaults(PersistentConfig& cfg) {
@@ -43,6 +44,7 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
 
 bool StorageManager::load(PersistentConfig& cfg) {
   String json = _prefs.getString("cfg", "");
+  _lastSavedJson = json;
   if (json.isEmpty()) {
     loadDefaults(cfg);
     save(cfg);
@@ -182,5 +184,7 @@ void StorageManager::save(const PersistentConfig& cfg) {
 
   String out;
   serializeJson(doc, out);
+  if (out == _lastSavedJson) return;
   _prefs.putString("cfg", out);
+  _lastSavedJson = out;
 }

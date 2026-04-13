@@ -37,8 +37,10 @@ private:
   uint32_t _lastReconnectMs {0};
   bool _lastTlsEnabled {false};
   uint16_t _lastPort {0};
+  char _clientId[40] {};
   CommandCallback _commandCallback;
 
+  void buildClientId();
   void configureClientForSecurity(bool force = false);
   uint16_t effectivePort() const;
   void tryReconnect();
