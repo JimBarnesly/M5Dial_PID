@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include "Config.h"
+#include "core/CoreConfig.h"
 
 enum class ControlLock : uint8_t {
   LocalOnly = 0,
@@ -64,7 +64,7 @@ struct BrewStage {
 struct BrewProfile {
   char name[24];
   uint8_t stageCount {0};
-  BrewStage stages[Config::MAX_STAGES];
+  BrewStage stages[CoreConfig::MAX_STAGES];
 };
 
 struct RuntimeEvent {
@@ -74,14 +74,14 @@ struct RuntimeEvent {
 
 struct PersistentConfig {
   ControlLock controlLock {ControlLock::LocalOrRemote};
-  float localSetpointC {Config::DEFAULT_SETPOINT_C};
-  uint32_t manualStageMinutes {Config::DEFAULT_STAGE_MINUTES};
-  float stageStartBandC {Config::DEFAULT_STAGE_START_BAND_C};
-  float overTempC {Config::DEFAULT_OVER_TEMP_C};
+  float localSetpointC {CoreConfig::DEFAULT_SETPOINT_C};
+  uint32_t manualStageMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};
+  float stageStartBandC {CoreConfig::DEFAULT_STAGE_START_BAND_C};
+  float overTempC {CoreConfig::DEFAULT_OVER_TEMP_C};
   float tempOffsetC {0.0f};
-  float tempSmoothingAlpha {Config::DEFAULT_TEMP_SMOOTHING_ALPHA};
+  float tempSmoothingAlpha {CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA};
   char mqttHost[64] {"192.168.1.10"};
-  uint16_t mqttPort {Config::MQTT_PORT_PLAIN};
+  uint16_t mqttPort {CoreConfig::MQTT_PORT_PLAIN};
   char mqttUser[32] {""};
   char mqttPass[32] {""};
   bool mqttUseTls {false};
@@ -90,15 +90,15 @@ struct PersistentConfig {
   char mqttTlsCaCert[768] {""};      // PEM
   uint16_t mqttCommsTimeoutSec {0};
   MqttFallbackMode mqttFallbackMode {MqttFallbackMode::HoldSetpoint};
-  uint16_t wifiPortalTimeoutSec {Config::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC};
-  float pidKp {Config::PID_KP};
-  float pidKi {Config::PID_KI};
-  float pidKd {Config::PID_KD};
-  float prevPidKp {Config::PID_KP};
-  float prevPidKi {Config::PID_KI};
-  float prevPidKd {Config::PID_KD};
+  uint16_t wifiPortalTimeoutSec {CoreConfig::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC};
+  float pidKp {CoreConfig::PID_KP};
+  float pidKi {CoreConfig::PID_KI};
+  float pidKd {CoreConfig::PID_KD};
+  float prevPidKp {CoreConfig::PID_KP};
+  float prevPidKi {CoreConfig::PID_KI};
+  float prevPidKd {CoreConfig::PID_KD};
   float tuneQualityScore {0.0f};
-  BrewProfile profiles[Config::MAX_PROFILES];
+  BrewProfile profiles[CoreConfig::MAX_PROFILES];
   uint8_t profileCount {0};
   uint8_t activeProfileIndex {0};
 };
@@ -110,7 +110,7 @@ struct RuntimeState {
 
   float currentTempC {NAN};
   float currentRawTempC {NAN};
-  float currentSetpointC {Config::DEFAULT_SETPOINT_C};
+  float currentSetpointC {CoreConfig::DEFAULT_SETPOINT_C};
   float heaterOutputPct {0.0f};
 
   bool wifiConnected {false};
@@ -125,9 +125,9 @@ struct RuntimeState {
   uint32_t lastAcceptedRemoteCommandAtMs {0};
 
   uint8_t currentStageIndex {0};
-  uint32_t activeStageMinutes {Config::DEFAULT_STAGE_MINUTES};
-  float desiredSetpointC {Config::DEFAULT_SETPOINT_C};
-  uint32_t desiredMinutes {Config::DEFAULT_STAGE_MINUTES};
+  uint32_t activeStageMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};
+  float desiredSetpointC {CoreConfig::DEFAULT_SETPOINT_C};
+  uint32_t desiredMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};
   char desiredRunAction[16] {"stop"};
   uint32_t stageStartedAtMs {0};
   uint32_t stageHoldStartedAtMs {0};
@@ -137,18 +137,19 @@ struct RuntimeState {
   float autoTuneOvershootC {0.0f};
   float autoTuneSettlingSec {0.0f};
   float autoTuneQualityScore {0.0f};
-  float currentKp {Config::PID_KP};
-  float currentKi {Config::PID_KI};
-  float currentKd {Config::PID_KD};
-  float previousKp {Config::PID_KP};
-  float previousKi {Config::PID_KI};
-  float previousKd {Config::PID_KD};
+  float currentKp {CoreConfig::PID_KP};
+  float currentKi {CoreConfig::PID_KI};
+  float currentKd {CoreConfig::PID_KD};
+  float previousKp {CoreConfig::PID_KP};
+  float previousKi {CoreConfig::PID_KI};
+  float previousKd {CoreConfig::PID_KD};
 
   AlarmCode activeAlarm {AlarmCode::None};
+  bool alarmAcknowledged {false};
   char alarmText[64] {"OK"};
   char settingsLabel[24] {""};
   char settingsValue[48] {""};
-  RuntimeEvent eventLog[Config::EVENT_LOG_CAPACITY];
+  RuntimeEvent eventLog[CoreConfig::EVENT_LOG_CAPACITY];
   uint8_t eventLogHead {0};
   uint8_t eventLogCount {0};
   bool pendingEventLogPublish {false};
