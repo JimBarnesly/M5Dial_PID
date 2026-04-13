@@ -56,3 +56,8 @@ These modules now depend on `CoreConfig` rather than the mixed `Config` namespac
 - Added MQTT command support for remote alarm acknowledgment (`/cmd/ack_alarm`) while keeping `/cmd/reset_alarm` for remote clears.
 - Added `alarmAcknowledged` status publication field so Node-RED can distinguish active-vs-acknowledged alarm state.
 - Moved buzzer GPIO signaling out of `AlarmManager` and into a new M5Dial adapter (`M5DialBuzzer`) so `AlarmManager` is now transport/device agnostic.
+
+## Follow-up extraction for temperature + PID path (2026-04-13 update)
+- `PidController` remains device agnostic (pure math/controller state; no board/UI deps).
+- `TempSensor` now references core constants (`CoreConfig`) instead of mixed device config, keeping probe logic portable while still using the selected sensor driver.
+- `HeaterOutput` was refactored to remove direct pin/GPIO ownership; output driving is now injected via callback (`setDriveHandler`), with M5Dial pin control moved to a platform adapter (`M5DialDigitalOut`).

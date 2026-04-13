@@ -18,6 +18,7 @@
 #include "DisplayManager.h"
 #include "DebugControl.h"
 #include "platform/m5dial/M5DialBuzzer.h"
+#include "platform/m5dial/M5DialDigitalOut.h"
 
 bool gDebugEnabled = true;
 bool gDebugDisableWifi = false;
@@ -33,9 +34,10 @@ PersistentConfig gCfg;
 RuntimeState gRt;
 TempSensor gTempSensor(Config::PIN_ONEWIRE);
 PidController gPid;
-HeaterOutput gHeater(Config::PIN_HEATER, Config::HEATER_ACTIVE_HIGH);
+HeaterOutput gHeater;
 AlarmManager gAlarm;
 M5DialBuzzer gBuzzer(Config::PIN_BUZZER);
+M5DialDigitalOut gHeaterOut(Config::PIN_HEATER);
 StorageManager gStorage;
 StageManager gStages;
 WifiManagerWrapper gWifi;
@@ -1342,6 +1344,9 @@ void setup() {
   gRt.previousKi = gCfg.prevPidKi;
   gRt.previousKd = gCfg.prevPidKd;
   gRt.autoTuneQualityScore = gCfg.tuneQualityScore;
+  gHeaterOut.begin();
+  gHeater.setActiveHigh(Config::HEATER_ACTIVE_HIGH);
+  gHeater.setDriveHandler([](bool on) { gHeaterOut.set(on); });
   gHeater.begin();
   gBuzzer.begin();
   gAlarm.setSignalHandler([](bool on) { gBuzzer.set(on); });
