@@ -1,15 +1,15 @@
 #include "WifiManagerWrapper.h"
-#include "Config.h"
+#include "core/CoreConfig.h"
 #include <WiFi.h>
 
 void WifiManagerWrapper::buildPortalCredentials() {
   uint64_t efuseMac = ESP.getEfuseMac();
   uint32_t suffix = static_cast<uint32_t>(efuseMac & 0xFFFFFFULL);
-  snprintf(_apName, sizeof(_apName), "%s%06lX", Config::WIFI_AP_NAME_PREFIX, static_cast<unsigned long>(suffix));
+  snprintf(_apName, sizeof(_apName), "%s%06lX", CoreConfig::WIFI_AP_NAME_PREFIX, static_cast<unsigned long>(suffix));
   snprintf(_apPass,
            sizeof(_apPass),
            "%s%06lX!",
-           Config::WIFI_AP_PASS_PREFIX,
+           CoreConfig::WIFI_AP_PASS_PREFIX,
            static_cast<unsigned long>(suffix));
 }
 
