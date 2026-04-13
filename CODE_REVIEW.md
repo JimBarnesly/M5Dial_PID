@@ -1,13 +1,68 @@
-# Full Code Review (2026-04-12)
+# Full Code Review + Portability Extraction (2026-04-13)
 
-This review identified release blockers and non-blocking concerns.
+## Scope reviewed
+- Application entrypoint/orchestration in `src/main.cpp`.
+- Reusable manager modules: `AlarmManager`, `AppState`, `DebugControl`, `MQTTManager`, `StageManager`, `StorageManager`, `WifiManagerWrapper`.
+- Hardware/UI layers (`DisplayManager`, M5Dial boot/input usage).
 
-## Status on this branch
+## Findings
 
-All previously identified blockers and non-blocking items from this review have now been implemented in code:
-- Remote setpoint command now validates input bounds.
-- MQTT command ACK handling is now explicit and consistent per command.
-- Storage writes now skip unchanged payloads to reduce flash wear.
-- MQTT client IDs are now device-unique.
-- Wi-Fi commissioning password is now device-derived.
-- Remote command control-lock handling is now consistently enforced.
+### 1) Reusable core code had an implicit M5Dial coupling through `Config.h`
+Even though reusable managers did not directly include `M5Dial.h`, they depended on `Config.h`, which mixed:
+- **portable runtime/business constants** (PID defaults, profile limits, MQTT timings)
+- **M5Dial device-pin constants** (`PIN_ONEWIRE`, `PIN_HEATER`, `PIN_BUZZER`)
+
+That made reuse in other device targets harder because importing manager code also imported device-specific assumptions.
+
+### 2) M5Dial-specific logic is concentrated in UI/input/bootstrap paths
+Dial-specific surface area remains in:
+- `src/main.cpp` (`M5Dial.begin`, button/encoder/touch handling, speaker tones)
+- `DisplayManager` (`M5Dial.Display`/`M5Dial.Touch` rendering & hit-testing)
+
+This is expected and should remain in the M5Dial platform adapter layer.
+
+### 3) Reusable managers are otherwise mostly portable
+The listed reusable modules are largely hardware-agnostic after config separation.
+Remaining platform affinity is ESP32/network stack level (WiFi/Preferences/PubSubClient), not M5Dial-specific.
+
+## Implemented extraction (Option A: core + platform layer in-repo)
+
+### New core library surface
+- Added `include/core/CoreConfig.h` for portable defaults, limits, and protocol constants.
+
+### New M5Dial platform surface
+- Added `include/platform/m5dial/M5DialDeviceConfig.h` for M5Dial pin mapping.
+
+### Compatibility bridge
+- `include/Config.h` now acts as a composition shim that re-exports both namespaces for existing app code.
+
+### Decoupled reusable modules from M5Dial config
+These modules now depend on `CoreConfig` rather than the mixed `Config` namespace:
+- `include/AppState.h`
+- `src/MqttManager.cpp`
+- `src/StageManager.cpp`
+- `src/StorageManager.cpp`
+- `src/WifiManagerWrapper.cpp`
+
+## Result
+- The reusable manager stack no longer consumes M5Dial pin config.
+- M5Dial-specific constants now live in a dedicated platform header.
+- Existing app behavior remains intact through `Config.h` compatibility exports.
+- This structure is ready for a future `platform/m5atomswitch/*` adapter while reusing the same core managers.
+
+## Follow-up extraction for alarm control (2026-04-13 update)
+- Alarm control paths were updated to be source-aware (`LocalUi`, `RemoteMqtt`, `System`) in `AlarmManager`.
+- Added local UI alarm-control gating so non-screen devices can disable local clear/ack behavior.
+- Added MQTT command support for remote alarm acknowledgment (`/cmd/ack_alarm`) while keeping `/cmd/reset_alarm` for remote clears.
+- Added `alarmAcknowledged` status publication field so Node-RED can distinguish active-vs-acknowledged alarm state.
+- Moved buzzer GPIO signaling out of `AlarmManager` and into a new M5Dial adapter (`M5DialBuzzer`) so `AlarmManager` is now transport/device agnostic.
+
+## Follow-up extraction for temperature + PID path (2026-04-13 update)
+- `PidController` remains device agnostic (pure math/controller state; no board/UI deps).
+- `TempSensor` now references core constants (`CoreConfig`) instead of mixed device config, keeping probe logic portable while still using the selected sensor driver.
+- `HeaterOutput` was refactored to remove direct pin/GPIO ownership; output driving is now injected via callback (`setDriveHandler`), with M5Dial pin control moved to a platform adapter (`M5DialDigitalOut`).
+
+## Follow-up for captive portal MQTT configurability (2026-04-13 update)
+- Extended `WifiManagerWrapper` captive portal with custom fields for MQTT host/port and surfaced getter APIs for pending config updates.
+- `main.cpp` now applies/saves MQTT host/port updates from the portal into persistent config and re-publishes effective config when connected.
+- Added remote command `/cmd/reset_wifi` and a local boot-time hold gesture (BtnA held for ~3s) to clear Wi-Fi settings, since the hardware reset button itself cannot be used as an application-level gesture.
