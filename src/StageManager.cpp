@@ -35,7 +35,7 @@ void StageManager::start() {
 void StageManager::startProfile(uint8_t index) {
   if (!_cfg || !_rt) return;
 
-  if (_cfg->profileCount == 0 || index >= _cfg->profileCount || index >= Config::MAX_PROFILES) {
+  if (_cfg->profileCount == 0 || index >= _cfg->profileCount || index >= CoreConfig::MAX_PROFILES) {
     DBG_LOGF("StageManager: invalid profile index=%u profileCount=%u\n",
              static_cast<unsigned>(index),
              static_cast<unsigned>(_cfg->profileCount));
@@ -43,7 +43,7 @@ void StageManager::startProfile(uint8_t index) {
   }
 
   BrewProfile& profile = _cfg->profiles[index];
-  if (profile.stageCount == 0 || profile.stageCount > Config::MAX_STAGES) {
+  if (profile.stageCount == 0 || profile.stageCount > CoreConfig::MAX_STAGES) {
     DBG_LOGF("StageManager: profile '%s' has invalid stageCount=%u\n",
              profile.name,
              static_cast<unsigned>(profile.stageCount));
@@ -103,11 +103,11 @@ void StageManager::stop() {
 
 const BrewProfile* StageManager::getActiveProfile() const {
   if (!_cfg) return nullptr;
-  if (_cfg->profileCount == 0 || _cfg->activeProfileIndex >= _cfg->profileCount || _cfg->activeProfileIndex >= Config::MAX_PROFILES) {
+  if (_cfg->profileCount == 0 || _cfg->activeProfileIndex >= _cfg->profileCount || _cfg->activeProfileIndex >= CoreConfig::MAX_PROFILES) {
     return nullptr;
   }
   const BrewProfile& profile = _cfg->profiles[_cfg->activeProfileIndex];
-  if (profile.stageCount == 0 || profile.stageCount > Config::MAX_STAGES) return nullptr;
+  if (profile.stageCount == 0 || profile.stageCount > CoreConfig::MAX_STAGES) return nullptr;
   return &profile;
 }
 
