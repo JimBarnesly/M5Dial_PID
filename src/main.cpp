@@ -376,6 +376,35 @@ static void persistActivePidAndQuality() {
   gStorage.save(gCfg);
 }
 
+static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
+  const char* portalHost = gWifi.getConfiguredMqttHost();
+  const uint16_t portalPort = gWifi.getConfiguredMqttPort();
+  bool changed = false;
+
+  if (portalHost && portalHost[0] != '\0' && strcmp(gCfg.mqttHost, portalHost) != 0) {
+    strlcpy(gCfg.mqttHost, portalHost, sizeof(gCfg.mqttHost));
+    changed = true;
+  }
+  if (gCfg.mqttPort != portalPort) {
+    gCfg.mqttPort = portalPort;
+    changed = true;
+  }
+  if (!changed) return;
+  if (persist) gStorage.save(gCfg);
+  if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+}
+
+static bool shouldResetWifiFromBootHold() {
+  const uint32_t holdWindowMs = 3000;
+  const uint32_t started = millis();
+  while (millis() - started < holdWindowMs) {
+    M5Dial.update();
+    if (!M5Dial.BtnA.isPressed()) return false;
+    delay(10);
+  }
+  return true;
+}
+
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -644,6 +673,16 @@ void handleCommands(const char* topic, const char* payload) {
         applied = false;
         reason = "invalid_wifi_timeout";
       }
+    }
+  } else if (t.endsWith("/cmd/reset_wifi")) {
+    command = "reset_wifi";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      gWifi.resetSettings();
+      logRuntimeEvent("WiFi settings reset (remote)");
     }
   } else if (t.endsWith("/cmd/pid")) {
     command = "pid";
@@ -1355,7 +1394,15 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
-    gWifi.begin(gCfg.wifiPortalTimeoutSec);
+    if (shouldResetWifiFromBootHold()) {
+      gWifi.resetSettings();
+      logRuntimeEvent("WiFi settings reset (local boot hold)");
+    }
+    gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
+    if (gWifi.hasPendingConfigUpdate()) {
+      applyWifiPortalNetworkConfig(true, false);
+      gWifi.clearPendingConfigUpdate();
+    }
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
@@ -1383,6 +1430,10 @@ void loop() {
 
   if (!debugWifiDisabledEffective()) {
     gWifi.update();
+    if (gWifi.hasPendingConfigUpdate()) {
+      applyWifiPortalNetworkConfig(true, true);
+      gWifi.clearPendingConfigUpdate();
+    }
     gRt.wifiConnected = gWifi.isConnected();
   } else {
     gRt.wifiConnected = false;
