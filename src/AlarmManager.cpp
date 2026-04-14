@@ -1,13 +1,17 @@
 #include "AlarmManager.h"
-#include "Config.h"
+#include "core/CoreConfig.h"
 #include <Arduino.h>
 #include <cstring>
-
-AlarmManager::AlarmManager(uint8_t buzzerPin) : _buzzerPin(buzzerPin) {}
+#include <utility>
 
 void AlarmManager::begin() {
-  pinMode(_buzzerPin, OUTPUT);
-  digitalWrite(_buzzerPin, LOW);
+  setSignal(false);
+}
+
+void AlarmManager::setSignalHandler(std::function<void(bool on)> handler) { _signalHandler = std::move(handler); }
+
+void AlarmManager::setSignal(bool on) {
+  if (_signalHandler) _signalHandler(on);
 }
 
 void AlarmManager::setAlarm(AlarmCode code, const char* text, bool beep) {
@@ -25,7 +29,8 @@ void AlarmManager::setAlarm(AlarmCode code, const char* text, bool beep) {
   }
 }
 
-void AlarmManager::clearAlarm() {
+void AlarmManager::clearAlarm(AlarmControlSource source) {
+  if (source == AlarmControlSource::LocalUi && !_allowLocalUiAlarmControl) return;
   _alarm = AlarmCode::None;
   strncpy(_text, "OK", sizeof(_text) - 1);
   _text[sizeof(_text) - 1] = '\0';
@@ -33,23 +38,27 @@ void AlarmManager::clearAlarm() {
   _notifyBeepUntilMs = 0;
   _lastToggleMs = 0;
   _beepState = false;
-  digitalWrite(_buzzerPin, LOW);
+  setSignal(false);
 }
 
-void AlarmManager::acknowledge() {
+bool AlarmManager::acknowledge(AlarmControlSource source) {
+  if (source == AlarmControlSource::LocalUi && !_allowLocalUiAlarmControl) return false;
   _acknowledged = true;
   _notifyBeepUntilMs = 0;
   _lastToggleMs = 0;
   _beepState = false;
-  digitalWrite(_buzzerPin, LOW);
+  setSignal(false);
+  return true;
 }
+
+void AlarmManager::setLocalUiAlarmControlEnabled(bool enabled) { _allowLocalUiAlarmControl = enabled; }
 
 bool AlarmManager::isAcknowledged() const { return _acknowledged; }
 AlarmCode AlarmManager::getAlarm() const { return _alarm; }
 const char* AlarmManager::getText() const { return _text; }
 
 void AlarmManager::notifyStageComplete() {
-  _notifyBeepUntilMs = millis() + Config::HOLD_COMPLETE_BEEP_MS;
+  _notifyBeepUntilMs = millis() + CoreConfig::HOLD_COMPLETE_BEEP_MS;
   _lastToggleMs = 0;
   _beepState = false;
 }
@@ -63,14 +72,14 @@ void AlarmManager::update() {
     if (_lastToggleMs == 0) {
       _lastToggleMs = now;
       _beepState = true;
-      digitalWrite(_buzzerPin, HIGH);
-    } else if (now - _lastToggleMs >= Config::ALARM_BEEP_MS) {
+      setSignal(true);
+    } else if (now - _lastToggleMs >= CoreConfig::ALARM_BEEP_MS) {
       _lastToggleMs = now;
       _beepState = !_beepState;
-      digitalWrite(_buzzerPin, _beepState ? HIGH : LOW);
+      setSignal(_beepState);
     }
   } else {
-    digitalWrite(_buzzerPin, LOW);
+    setSignal(false);
     _beepState = false;
     _lastToggleMs = 0;
   }

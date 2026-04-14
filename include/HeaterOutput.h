@@ -1,11 +1,14 @@
 #pragma once
 #include <Arduino.h>
+#include <functional>
 
 
 class HeaterOutput {
 public:
-  explicit HeaterOutput(uint8_t pin, bool activeHigh = true);
+  HeaterOutput() = default;
   void begin();
+  void setDriveHandler(std::function<void(bool on)> handler);
+  void setActiveHigh(bool activeHigh);
   void setEnabled(bool enabled);
   void setOutputPercent(float percent);
   void setMaxOutputPercent(float percent);
@@ -15,13 +18,14 @@ public:
   bool isOn() const;
 
 private:
-  uint8_t _pin;
-  bool _activeHigh;
+  void writePin(bool on);
+
+  std::function<void(bool on)> _driveHandler;
+  bool _activeHigh {true};
   bool _enabled {false};
   bool _outputOn {false};
   float _percent {0.0f};
   float _maxPercent {100.0f};
   uint32_t _windowStartedMs {0};
 
-  void writePin(bool on);
 };
