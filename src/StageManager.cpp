@@ -42,7 +42,7 @@ void StageManager::startProfile(uint8_t index) {
     return;
   }
 
-  BrewProfile& profile = _cfg->profiles[index];
+  ProcessProfile& profile = _cfg->profiles[index];
   if (profile.stageCount == 0 || profile.stageCount > CoreConfig::MAX_STAGES) {
     DBG_LOGF("StageManager: profile '%s' has invalid stageCount=%u\n",
              profile.name,
@@ -51,7 +51,7 @@ void StageManager::startProfile(uint8_t index) {
   }
 
   _cfg->activeProfileIndex = index;
-  const BrewStage& stage = profile.stages[0];
+  const ProcessStage& stage = profile.stages[0];
   DBG_LOGF("StageManager: start profile index=%u name='%s' stageCount=%u firstTarget=%.2f firstHold=%lu\n",
            static_cast<unsigned>(index),
            profile.name,
@@ -101,19 +101,19 @@ void StageManager::stop() {
   _manualStage.holdSeconds = (_cfg ? _cfg->manualStageMinutes : 0) * 60UL;
 }
 
-const BrewProfile* StageManager::getActiveProfile() const {
+const ProcessProfile* StageManager::getActiveProfile() const {
   if (!_cfg) return nullptr;
   if (_cfg->profileCount == 0 || _cfg->activeProfileIndex >= _cfg->profileCount || _cfg->activeProfileIndex >= CoreConfig::MAX_PROFILES) {
     return nullptr;
   }
-  const BrewProfile& profile = _cfg->profiles[_cfg->activeProfileIndex];
+  const ProcessProfile& profile = _cfg->profiles[_cfg->activeProfileIndex];
   if (profile.stageCount == 0 || profile.stageCount > CoreConfig::MAX_STAGES) return nullptr;
   return &profile;
 }
 
-const BrewStage* StageManager::getCurrentStage() const {
+const ProcessStage* StageManager::getCurrentStage() const {
   if (!_cfg || !_rt) return nullptr;
-  const BrewProfile* profile = getActiveProfile();
+  const ProcessProfile* profile = getActiveProfile();
   if (profile && _rt->currentStageIndex < profile->stageCount) {
     return &profile->stages[_rt->currentStageIndex];
   }
@@ -143,7 +143,7 @@ const BrewStage* StageManager::getCurrentStage() const {
 uint32_t StageManager::getRemainingSeconds() const {
   if (!_rt) return 0;
   uint32_t totalSec = _rt->activeStageMinutes * 60UL;
-  const BrewStage* stage = getCurrentStage();
+  const ProcessStage* stage = getCurrentStage();
   if (stage) totalSec = stage->holdSeconds;
   if (totalSec == 0) return 0;
   if (!_rt->stageTimerStarted) return totalSec;
@@ -154,14 +154,14 @@ uint32_t StageManager::getRemainingSeconds() const {
 void StageManager::update(float currentTempC) {
   if (!_cfg || !_rt || _rt->runState != RunState::Running) return;
 
-  const BrewProfile* profile = getActiveProfile();
+  const ProcessProfile* profile = getActiveProfile();
   const bool hasProfileStage = profile && (_rt->currentStageIndex < profile->stageCount);
 
   float targetC = _rt->currentSetpointC;
   uint32_t totalSec = _rt->activeStageMinutes * 60UL;
 
   if (hasProfileStage) {
-    const BrewStage& stage = profile->stages[_rt->currentStageIndex];
+    const ProcessStage& stage = profile->stages[_rt->currentStageIndex];
     _rt->currentSetpointC = stage.targetC;
     _rt->activeStageMinutes = (stage.holdSeconds + 59UL) / 60UL;
     targetC = stage.targetC;
@@ -196,7 +196,7 @@ void StageManager::update(float currentTempC) {
       const uint8_t nextIndex = _rt->currentStageIndex + 1;
       if (hasProfileStage && nextIndex < profile->stageCount) {
         _rt->currentStageIndex = nextIndex;
-        const BrewStage& nextStage = profile->stages[nextIndex];
+        const ProcessStage& nextStage = profile->stages[nextIndex];
         _rt->currentSetpointC = nextStage.targetC;
         _rt->activeStageMinutes = (nextStage.holdSeconds + 59UL) / 60UL;
         _rt->stageStartedAtMs = millis();

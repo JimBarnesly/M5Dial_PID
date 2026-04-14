@@ -212,7 +212,7 @@ static void updateAutoTune() {
 }
 
 static void debugLogBanner() {
-  DBG_PRINTLN("\n=== BrewCore HLT V8 debug boot ===");
+  DBG_PRINTLN("\n=== Env Controller debug boot ===");
   DBG_PRINTF("DEBUG_ENABLED=%d WIFI=%d MQTT=%d NET_MODE=%s RUNTIME_NET_TOGGLES=%d\n",
              gDebugEnabled,
              !debugWifiDisabledEffective(),
@@ -421,14 +421,14 @@ static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = n
     index = gCfg.profileCount++;
   }
 
-  BrewProfile& profile = gCfg.profiles[index];
+  ProcessProfile& profile = gCfg.profiles[index];
   strlcpy(profile.name, profileObj["name"] | "PROFILE", sizeof(profile.name));
   profile.stageCount = 0;
   JsonArrayConst stages = profileObj["stages"].as<JsonArrayConst>();
   if (stages.isNull()) return false;
   for (JsonObjectConst s : stages) {
     if (profile.stageCount >= Config::MAX_STAGES) break;
-    BrewStage& stage = profile.stages[profile.stageCount];
+    ProcessStage& stage = profile.stages[profile.stageCount];
     strlcpy(stage.name, s["name"] | "STAGE", sizeof(stage.name));
     const float target = s["targetC"] | NAN;
     const uint32_t hold = s["holdSeconds"] | 0UL;
@@ -1474,7 +1474,7 @@ void loop() {
   gRt.heatOn = gHeater.isOn();
   gAlarm.update();
 
-  const BrewStage* stage = gStages.getCurrentStage();
+  const ProcessStage* stage = gStages.getCurrentStage();
   const uint32_t remaining = gStages.getRemainingSeconds();
 
   if (gRt.runState == RunState::Complete) {

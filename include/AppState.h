@@ -55,16 +55,16 @@ enum class AlarmCode : uint8_t {
   MqttOffline
 };
 
-struct BrewStage {
+struct ProcessStage {
   char name[20];
   float targetC {0.0f};
   uint32_t holdSeconds {0};
 };
 
-struct BrewProfile {
+struct ProcessProfile {
   char name[24];
   uint8_t stageCount {0};
-  BrewStage stages[CoreConfig::MAX_STAGES];
+  ProcessStage stages[CoreConfig::MAX_STAGES];
 };
 
 struct RuntimeEvent {
@@ -98,7 +98,7 @@ struct PersistentConfig {
   float prevPidKi {CoreConfig::PID_KI};
   float prevPidKd {CoreConfig::PID_KD};
   float tuneQualityScore {0.0f};
-  BrewProfile profiles[CoreConfig::MAX_PROFILES];
+  ProcessProfile profiles[CoreConfig::MAX_PROFILES];
   uint8_t profileCount {0};
   uint8_t activeProfileIndex {0};
 };
