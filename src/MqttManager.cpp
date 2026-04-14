@@ -82,7 +82,13 @@ void MqttManager::tryReconnect() {
     subscribeTopics();
     _rt->lastValidMqttConnectionAtMs = millis();
   } else {
-    DBG_LOGLN("MQTT reconnect failed");
+    DBG_LOGF("MQTT reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
+             _client.state(),
+             _cfg->mqttHost,
+             effectivePort(),
+             _cfg->mqttUseTls,
+             _rt ? _rt->wifiConnected : false,
+             strlen(_cfg->mqttUser) > 0);
   }
 }
 
