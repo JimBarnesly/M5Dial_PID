@@ -1,5 +1,5 @@
 #include "MqttManager.h"
-#include "Config.h"
+#include "core/CoreConfig.h"
 #include "DebugControl.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -36,7 +36,7 @@ void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
 void MqttManager::buildClientId() {
   const uint64_t efuseMac = ESP.getEfuseMac();
   const uint32_t suffix = static_cast<uint32_t>(efuseMac & 0xFFFFFFULL);
-  snprintf(_clientId, sizeof(_clientId), "%s_%06lX", Config::MQTT_CLIENT_ID, static_cast<unsigned long>(suffix));
+  snprintf(_clientId, sizeof(_clientId), "%s_%06lX", CoreConfig::MQTT_CLIENT_ID, static_cast<unsigned long>(suffix));
 }
 
 void MqttManager::setCommandCallback(CommandCallback cb) {
@@ -67,7 +67,7 @@ void MqttManager::update() {
 }
 
 void MqttManager::tryReconnect() {
-  if (millis() - _lastReconnectMs < Config::MQTT_RECONNECT_MS) return;
+  if (millis() - _lastReconnectMs < CoreConfig::MQTT_RECONNECT_MS) return;
   _lastReconnectMs = millis();
 
   bool ok = false;
@@ -82,12 +82,18 @@ void MqttManager::tryReconnect() {
     subscribeTopics();
     _rt->lastValidMqttConnectionAtMs = millis();
   } else {
-    DBG_LOGLN("MQTT reconnect failed");
+    DBG_LOGF("MQTT reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
+             _client.state(),
+             _cfg->mqttHost,
+             effectivePort(),
+             _cfg->mqttUseTls,
+             _rt ? _rt->wifiConnected : false,
+             strlen(_cfg->mqttUser) > 0);
   }
 }
 
 void MqttManager::subscribeTopics() {
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/cmd/#";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/cmd/#";
   _client.subscribe(topic.c_str());
 }
 
@@ -131,6 +137,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["mqttDisabledEffective"] = debugMqttDisabledEffective();
   doc["networkMode"] = debugNetworkModeLabel();
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
+  doc["alarmAcknowledged"] = rt.alarmAcknowledged;
   doc["alarmText"] = rt.alarmText;
   doc["activeStage"] = activeStageName ? activeStageName : "";
   doc["remainingSec"] = remainingSec;
@@ -138,7 +145,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   String out;
   serializeJson(doc, out);
 
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/status";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/status";
   _client.publish(topic.c_str(), out.c_str(), true);
   publishShadow(rt, remainingSec);
 }
@@ -161,7 +168,7 @@ void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
   String out;
   serializeJson(doc, out);
 
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/shadow";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/shadow";
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -189,7 +196,7 @@ void MqttManager::publishCommandAck(const char* cmdId,
   String out;
   serializeJson(doc, out);
 
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/event/cmd_ack";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/cmd_ack";
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -207,13 +214,13 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   String out;
   serializeJson(doc, out);
 
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/status/calibration";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/status/calibration";
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
 void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   if (!_client.connected() || !rt.pendingProfileCompletePublish) return;
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/event/profile_complete";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/profile_complete";
   _client.publish(topic.c_str(), "true", true);
   rt.pendingProfileCompletePublish = false;
 }
@@ -244,7 +251,7 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   String out;
   serializeJson(doc, out);
 
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/config/effective";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/config/effective";
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -253,10 +260,10 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
 
   JsonDocument doc;
   JsonArray events = doc["events"].to<JsonArray>();
-  const uint8_t count = rt.eventLogCount > Config::EVENT_LOG_CAPACITY ? Config::EVENT_LOG_CAPACITY : rt.eventLogCount;
-  const uint8_t start = (rt.eventLogHead + Config::EVENT_LOG_CAPACITY - count) % Config::EVENT_LOG_CAPACITY;
+  const uint8_t count = rt.eventLogCount > CoreConfig::EVENT_LOG_CAPACITY ? CoreConfig::EVENT_LOG_CAPACITY : rt.eventLogCount;
+  const uint8_t start = (rt.eventLogHead + CoreConfig::EVENT_LOG_CAPACITY - count) % CoreConfig::EVENT_LOG_CAPACITY;
   for (uint8_t i = 0; i < count; ++i) {
-    const RuntimeEvent& ev = rt.eventLog[(start + i) % Config::EVENT_LOG_CAPACITY];
+    const RuntimeEvent& ev = rt.eventLog[(start + i) % CoreConfig::EVENT_LOG_CAPACITY];
     JsonObject item = events.add<JsonObject>();
     item["atMs"] = ev.atMs;
     item["text"] = ev.text;
@@ -265,7 +272,7 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
 
   String out;
   serializeJson(doc, out);
-  String topic = String(Config::MQTT_TOPIC_BASE) + "/event/log";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/log";
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -274,8 +281,8 @@ bool MqttManager::isConnected() {
 }
 
 uint16_t MqttManager::effectivePort() const {
-  if (!_cfg) return Config::MQTT_PORT_PLAIN;
-  if (_cfg->mqttUseTls && _cfg->mqttPort == Config::MQTT_PORT_PLAIN) return Config::MQTT_PORT_TLS;
+  if (!_cfg) return CoreConfig::MQTT_PORT_PLAIN;
+  if (_cfg->mqttUseTls && _cfg->mqttPort == CoreConfig::MQTT_PORT_PLAIN) return CoreConfig::MQTT_PORT_TLS;
   return _cfg->mqttPort;
 }
 

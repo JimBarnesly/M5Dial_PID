@@ -12,7 +12,7 @@ public:
   void requestImmediateUi();
   bool wasSettingsTouched();
   bool wasAlarmPillTouched();
-  void draw(const PersistentConfig& cfg, const RuntimeState& rt, const BrewStage* stage, uint32_t remainingSec);
+  void draw(const PersistentConfig& cfg, const RuntimeState& rt, const ProcessStage* stage, uint32_t remainingSec);
 
 private:
   String formatTime(uint32_t sec);
@@ -20,7 +20,7 @@ private:
 
   void drawStaticUi();
   void drawRing(float progress, bool timerStarted, RunState runState, uint32_t remainingSec, bool force = false);
-  void drawStagePill(const RuntimeState& rt, const BrewStage* stage, bool force = false);
+  void drawStagePill(const RuntimeState& rt, const ProcessStage* stage, bool force = false);
   void drawCenterTemp(const RuntimeState& rt, uint32_t now, bool force = false);
   void drawTargetRow(const RuntimeState& rt, bool force = false);
   void drawInfoRow(const RuntimeState& rt, uint32_t remainingSec, bool force = false);
