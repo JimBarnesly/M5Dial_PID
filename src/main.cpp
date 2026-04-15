@@ -2,6 +2,7 @@
 #include <M5Dial.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +49,7 @@ uint32_t gLastStatusMs = 0, gLastPidMs = 0, gLastMqttServiceMs = 0, gHeatEvalWin
 float gHeatEvalStartTemp = NAN;
 bool gCompletionHandled = false;
 bool gPendingAlarmStatusPublish = false;
+bool gOtaInitialized = false;
 
 namespace CommandSuffix {
 constexpr char CommandTopic[] = "/command";
@@ -282,6 +284,30 @@ static void debugPrintState(const char* tag) {
              gRt.mqttConnected,
              gRt.stageTimerStarted,
              (unsigned)gRt.activeAlarm);
+}
+
+static void setupOta() {
+  if (gOtaInitialized) return;
+
+  String host = String("env-ctrl-");
+  uint32_t chipId = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFFULL);
+  char suffix[7] {};
+  snprintf(suffix, sizeof(suffix), "%06lX", static_cast<unsigned long>(chipId));
+  host += suffix;
+
+  ArduinoOTA.setHostname(host.c_str());
+  ArduinoOTA.onStart([]() { DBG_LOGLN("[OTA] Start"); });
+  ArduinoOTA.onEnd([]() { DBG_LOGLN("[OTA] End"); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    const unsigned int pct = total == 0 ? 0U : static_cast<unsigned int>((progress * 100U) / total);
+    DBG_LOGF("[OTA] Progress: %u%%\n", pct);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    DBG_LOGF("[OTA] Error[%u]\n", static_cast<unsigned>(error));
+  });
+  ArduinoOTA.begin();
+  gOtaInitialized = true;
+  DBG_LOGF("[OTA] Ready hostname=%s ip=%s\n", host.c_str(), WiFi.localIP().toString().c_str());
 }
 
 static const char* alarmText(AlarmCode code) {
@@ -1481,6 +1507,7 @@ void setup() {
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
+    if (gWifi.isConnected()) setupOta();
   } else {
     DBG_LOGLN("WiFi disabled by debug/compile-time network mode");
     gRt.wifiConnected = false;
@@ -1508,6 +1535,10 @@ void loop() {
   if (!debugWifiDisabledEffective()) {
     gWifi.update();
     gRt.wifiConnected = gWifi.isConnected();
+    if (gRt.wifiConnected) {
+      if (!gOtaInitialized) setupOta();
+      ArduinoOTA.handle();
+    }
   } else {
     gRt.wifiConnected = false;
   }

@@ -59,7 +59,7 @@ void WifiManagerWrapper::update() {
     if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
       _lastReconnectAttemptMs = millis();
       if (WiFi.SSID().length() > 0) {
-        Serial.println("[WiFi] reconnect attempt using stored STA credentials");
+        Serial.println("[WiFi] reconnect attempt using saved credentials");
         WiFi.begin();
       } else {
         Serial.println("[WiFi] reconnect attempt");
