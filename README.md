@@ -1,4 +1,4 @@
-# M5Dial HLT Controller V3
+# M5Dial Environment Controller
 
 Key changes in V3:
 - Partial redraw UI instead of full-screen flashing.
