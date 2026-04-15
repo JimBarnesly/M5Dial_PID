@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <M5Dial.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,8 @@
 #include "MqttManager.h"
 #include "DisplayManager.h"
 #include "DebugControl.h"
+#include "platform/m5dial/M5DialBuzzer.h"
+#include "platform/m5dial/M5DialDigitalOut.h"
 
 bool gDebugEnabled = true;
 bool gDebugDisableWifi = false;
@@ -32,8 +35,10 @@ PersistentConfig gCfg;
 RuntimeState gRt;
 TempSensor gTempSensor(Config::PIN_ONEWIRE);
 PidController gPid;
-HeaterOutput gHeater(Config::PIN_HEATER, Config::HEATER_ACTIVE_HIGH);
-AlarmManager gAlarm(Config::PIN_BUZZER);
+HeaterOutput gHeater;
+AlarmManager gAlarm;
+M5DialBuzzer gBuzzer(Config::PIN_BUZZER);
+M5DialDigitalOut gHeaterOut(Config::PIN_HEATER);
 StorageManager gStorage;
 StageManager gStages;
 WifiManagerWrapper gWifi;
@@ -208,7 +213,7 @@ static void updateAutoTune() {
 }
 
 static void debugLogBanner() {
-  DBG_PRINTLN("\n=== BrewCore HLT V8 debug boot ===");
+  DBG_PRINTLN("\n=== Env Controller debug boot ===");
   DBG_PRINTF("DEBUG_ENABLED=%d WIFI=%d MQTT=%d NET_MODE=%s RUNTIME_NET_TOGGLES=%d\n",
              gDebugEnabled,
              !debugWifiDisabledEffective(),
@@ -372,6 +377,86 @@ static void persistActivePidAndQuality() {
   gStorage.save(gCfg);
 }
 
+static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
+  const char* portalHost = gWifi.getConfiguredMqttHost();
+  const uint16_t portalPort = gWifi.getConfiguredMqttPort();
+  bool changed = false;
+
+  if (portalHost && portalHost[0] != '\0' && strcmp(gCfg.mqttHost, portalHost) != 0) {
+    strlcpy(gCfg.mqttHost, portalHost, sizeof(gCfg.mqttHost));
+    changed = true;
+  }
+  if (gCfg.mqttPort != portalPort) {
+    gCfg.mqttPort = portalPort;
+    changed = true;
+  }
+  if (!changed) return;
+  DBG_PRINTF("WiFi portal config changed mqttHost=%s mqttPort=%u\n", gCfg.mqttHost, gCfg.mqttPort);
+  if (persist) gStorage.save(gCfg);
+  if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+}
+
+static void debugPrintBootNetworkTargets() {
+  String ssidStr = WiFi.SSID();
+  const char* ssid = (ssidStr.length() > 0) ? ssidStr.c_str() : "<not-associated-yet>";
+
+  IPAddress mqttIp;
+  bool resolved = false;
+  if (gCfg.mqttHost[0] != '\0') {
+    resolved = WiFi.hostByName(gCfg.mqttHost, mqttIp);
+  }
+
+  DBG_PRINTF("Boot network target SSID=%s\n", ssid);
+  if (resolved) {
+    DBG_PRINTF("Boot MQTT target host=%s resolved_ip=%s port=%u tls=%d\n",
+               gCfg.mqttHost,
+               mqttIp.toString().c_str(),
+               gCfg.mqttPort,
+               gCfg.mqttUseTls);
+  } else {
+    DBG_PRINTF("Boot MQTT target host=%s resolved_ip=<unresolved> port=%u tls=%d\n",
+               gCfg.mqttHost,
+               gCfg.mqttPort,
+               gCfg.mqttUseTls);
+  }
+}
+
+static void showBootInfoScreen(uint32_t durationMs = 5000) {
+  String ssid = WiFi.SSID();
+  if (ssid.length() == 0) ssid = "<not-associated>";
+
+  IPAddress mqttIp;
+  const bool mqttResolved = (gCfg.mqttHost[0] != '\0') && WiFi.hostByName(gCfg.mqttHost, mqttIp);
+  const String mqttIpText = mqttResolved ? mqttIp.toString() : String("<unresolved>");
+
+  auto& d = M5Dial.Display;
+  d.fillScreen(BLACK);
+  d.setTextColor(WHITE, BLACK);
+  d.setTextDatum(top_left);
+  d.setFont(&fonts::Font2);
+  d.drawString("Environment Controller", 8, 8);
+
+  d.setTextColor(GOLD, BLACK);
+  d.drawString(String("FW: ") + CoreConfig::FIRMWARE_VERSION, 8, 34);
+
+  d.setTextColor(CYAN, BLACK);
+  d.drawString(String("SSID: ") + ssid, 8, 60);
+
+  d.setTextColor(WHITE, BLACK);
+  d.drawString(String("MQTT Host: ") + gCfg.mqttHost, 8, 86);
+  d.drawString(String("MQTT IP: ") + mqttIpText, 8, 110);
+  d.drawString(String("Port/TLS: ") + String(gCfg.mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 134);
+
+  d.setTextColor(0xBDF7, BLACK);
+  d.drawString("Starting main screen...", 8, 168);
+
+  const uint32_t started = millis();
+  while (millis() - started < durationMs) {
+    M5Dial.update();
+    delay(20);
+  }
+}
+
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -387,14 +472,14 @@ static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = n
     index = gCfg.profileCount++;
   }
 
-  BrewProfile& profile = gCfg.profiles[index];
+  ProcessProfile& profile = gCfg.profiles[index];
   strlcpy(profile.name, profileObj["name"] | "PROFILE", sizeof(profile.name));
   profile.stageCount = 0;
   JsonArrayConst stages = profileObj["stages"].as<JsonArrayConst>();
   if (stages.isNull()) return false;
   for (JsonObjectConst s : stages) {
     if (profile.stageCount >= Config::MAX_STAGES) break;
-    BrewStage& stage = profile.stages[profile.stageCount];
+    ProcessStage& stage = profile.stages[profile.stageCount];
     strlcpy(stage.name, s["name"] | "STAGE", sizeof(stage.name));
     const float target = s["targetC"] | NAN;
     const uint32_t hold = s["holdSeconds"] | 0UL;
@@ -411,16 +496,17 @@ static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = n
 
 void syncAlarmFromManager() {
   gRt.activeAlarm = gAlarm.getAlarm();
+  gRt.alarmAcknowledged = gAlarm.isAcknowledged();
   strlcpy(gRt.alarmText, gAlarm.getText(), sizeof(gRt.alarmText));
 }
 
 void clearFaultIfRecoverable() {
-  if (gAlarm.getAlarm() == AlarmCode::SensorFault && gRt.sensorHealthy) gAlarm.clearAlarm();
-  if (gAlarm.getAlarm() == AlarmCode::OverTemp && gRt.currentTempC < (gCfg.overTempC - 1.0f)) gAlarm.clearAlarm();
+  if (gAlarm.getAlarm() == AlarmCode::SensorFault && gRt.sensorHealthy) gAlarm.clearAlarm(AlarmControlSource::System);
+  if (gAlarm.getAlarm() == AlarmCode::OverTemp && gRt.currentTempC < (gCfg.overTempC - 1.0f)) gAlarm.clearAlarm(AlarmControlSource::System);
   if (gAlarm.getAlarm() == AlarmCode::HeatingIneffective && !isnan(gHeatEvalStartTemp) && gRt.currentTempC >= gHeatEvalStartTemp + Config::MIN_EXPECTED_RISE_C) {
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::System);
   }
-  if (gAlarm.getAlarm() == AlarmCode::MqttOffline && gRt.mqttConnected) gAlarm.clearAlarm();
+  if (gAlarm.getAlarm() == AlarmCode::MqttOffline && gRt.mqttConnected) gAlarm.clearAlarm(AlarmControlSource::System);
   syncAlarmFromManager();
 }
 
@@ -585,6 +671,24 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_mqtt_port";
       }
     }
+  } else if (t.endsWith("/cmd/mqtt_tls")) {
+    command = "mqtt_tls";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const int tls = doc["enabled"] | parsePayloadInt(-1);
+      if (tls == 0 || tls == 1) {
+        gCfg.mqttUseTls = (tls == 1);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_tls";
+      }
+    }
   } else if (t.endsWith("/cmd/mqtt_timeout")) {
     command = "mqtt_timeout";
     accepted = true;
@@ -639,6 +743,16 @@ void handleCommands(const char* topic, const char* payload) {
         applied = false;
         reason = "invalid_wifi_timeout";
       }
+    }
+  } else if (t.endsWith("/cmd/reset_wifi")) {
+    command = "reset_wifi";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      gWifi.resetSettings();
+      logRuntimeEvent("WiFi settings reset (remote)");
     }
   } else if (t.endsWith("/cmd/pid")) {
     command = "pid";
@@ -904,9 +1018,27 @@ void handleCommands(const char* topic, const char* payload) {
       finishAck();
       return;
     }
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::RemoteMqtt);
     syncAlarmFromManager();
-    logRuntimeEvent("Alarm reset");
+    logRuntimeEvent("Alarm reset (remote)");
+    gDisplay.invalidateAll();
+  } else if (t.endsWith("/cmd/ack_alarm")) {
+    command = "ack_alarm";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+      finishAck();
+      return;
+    }
+    if (!gAlarm.acknowledge(AlarmControlSource::RemoteMqtt)) {
+      applied = false;
+      reason = "ack_not_allowed";
+      finishAck();
+      return;
+    }
+    syncAlarmFromManager();
+    logRuntimeEvent("Alarm acknowledged (remote)");
     gDisplay.invalidateAll();
   } else if (t.endsWith("/cmd/start_autotune")) {
     command = "start_autotune";
@@ -1015,7 +1147,7 @@ void handleTouch() {
 
   if (gRt.activeAlarm != AlarmCode::None && pointInRect(t.x, t.y, 40, 42, 160, 24)) {
     DBG_PRINTLN("Touch reset alarm");
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::LocalUi);
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     M5Dial.Speaker.tone(3200, 20);
@@ -1094,7 +1226,7 @@ void processInput() {
 
   if (gRt.activeAlarm != AlarmCode::None && gDisplay.wasAlarmPillTouched()) {
     DBG_PRINTLN("Display alarm-pill reset");
-    gAlarm.clearAlarm();
+    gAlarm.clearAlarm(AlarmControlSource::LocalUi);
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     M5Dial.Speaker.tone(3200, 20);
@@ -1299,7 +1431,6 @@ void setup() {
   M5Dial.begin(cfg, true, false);
   M5Dial.Display.setRotation(0);
 
-  gDisplay.begin();
   gStorage.begin();
   gStorage.load(gCfg);
   gRt.currentSetpointC = gCfg.localSetpointC;
@@ -1321,12 +1452,27 @@ void setup() {
   gRt.previousKi = gCfg.prevPidKi;
   gRt.previousKd = gCfg.prevPidKd;
   gRt.autoTuneQualityScore = gCfg.tuneQualityScore;
+  gHeaterOut.begin();
+  gHeater.setActiveHigh(Config::HEATER_ACTIVE_HIGH);
+  gHeater.setDriveHandler([](bool on) { gHeaterOut.set(on); });
   gHeater.begin();
+  gBuzzer.begin();
+  gAlarm.setSignalHandler([](bool on) { gBuzzer.set(on); });
   gAlarm.begin();
+  gAlarm.setLocalUiAlarmControlEnabled(true);
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
-    gWifi.begin(gCfg.wifiPortalTimeoutSec);
+    gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
+    debugPrintBootNetworkTargets();
+    DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
+               gCfg.mqttHost,
+               gCfg.mqttPort,
+               static_cast<unsigned>(gCfg.wifiPortalTimeoutSec));
+    if (gWifi.hasPendingConfigUpdate()) {
+      applyWifiPortalNetworkConfig(true, false);
+      gWifi.clearPendingConfigUpdate();
+    }
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
@@ -1343,6 +1489,8 @@ void setup() {
     gRt.mqttConnected = false;
   }
 
+  showBootInfoScreen(5000);
+  gDisplay.begin();
   gDisplay.invalidateAll();
   logRuntimeEvent("System booted");
   debugPrintState("setup");
@@ -1354,6 +1502,10 @@ void loop() {
 
   if (!debugWifiDisabledEffective()) {
     gWifi.update();
+    if (gWifi.hasPendingConfigUpdate()) {
+      applyWifiPortalNetworkConfig(true, true);
+      gWifi.clearPendingConfigUpdate();
+    }
     gRt.wifiConnected = gWifi.isConnected();
   } else {
     gRt.wifiConnected = false;
@@ -1389,7 +1541,7 @@ void loop() {
   gRt.heatOn = gHeater.isOn();
   gAlarm.update();
 
-  const BrewStage* stage = gStages.getCurrentStage();
+  const ProcessStage* stage = gStages.getCurrentStage();
   const uint32_t remaining = gStages.getRemainingSeconds();
 
   if (gRt.runState == RunState::Complete) {
