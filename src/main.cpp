@@ -450,27 +450,6 @@ static void showBootInfoScreen(uint32_t durationMs = 5000) {
   }
 }
 
-static bool shouldResetWifiFromBootHold(uint32_t holdMs = 8000, uint32_t settleMs = 250) {
-  // Hold BtnA during boot to intentionally clear saved Wi-Fi credentials.
-  // Keep this deliberately long so normal power-on button presses don't wipe Wi-Fi.
-  // The settle period avoids false positives during early input initialization.
-  const uint32_t settleStart = millis();
-  while (millis() - settleStart < settleMs) {
-    M5Dial.update();
-    delay(10);
-  }
-
-  if (!M5Dial.BtnA.isPressed()) return false;
-
-  const uint32_t started = millis();
-  while (millis() - started < holdMs) {
-    M5Dial.update();
-    if (!M5Dial.BtnA.isPressed()) return false;
-    delay(10);
-  }
-  return true;
-}
-
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -1493,10 +1472,6 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
-    if (shouldResetWifiFromBootHold()) {
-      gWifi.resetSettings();
-      logRuntimeEvent("WiFi settings reset (local boot hold)");
-    }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
