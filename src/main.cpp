@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <M5Dial.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -393,6 +394,31 @@ static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
   DBG_PRINTF("WiFi portal config changed mqttHost=%s mqttPort=%u\n", gCfg.mqttHost, gCfg.mqttPort);
   if (persist) gStorage.save(gCfg);
   if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+}
+
+static void debugPrintBootNetworkTargets() {
+  String ssidStr = WiFi.SSID();
+  const char* ssid = (ssidStr.length() > 0) ? ssidStr.c_str() : "<not-associated-yet>";
+
+  IPAddress mqttIp;
+  bool resolved = false;
+  if (gCfg.mqttHost[0] != '\0') {
+    resolved = WiFi.hostByName(gCfg.mqttHost, mqttIp);
+  }
+
+  DBG_PRINTF("Boot network target SSID=%s\n", ssid);
+  if (resolved) {
+    DBG_PRINTF("Boot MQTT target host=%s resolved_ip=%s port=%u tls=%d\n",
+               gCfg.mqttHost,
+               mqttIp.toString().c_str(),
+               gCfg.mqttPort,
+               gCfg.mqttUseTls);
+  } else {
+    DBG_PRINTF("Boot MQTT target host=%s resolved_ip=<unresolved> port=%u tls=%d\n",
+               gCfg.mqttHost,
+               gCfg.mqttPort,
+               gCfg.mqttUseTls);
+  }
 }
 
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
@@ -1403,6 +1429,7 @@ void setup() {
 
   if (!debugWifiDisabledEffective()) {
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
+    debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
                gCfg.mqttHost,
                gCfg.mqttPort,
