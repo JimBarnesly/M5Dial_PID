@@ -9,7 +9,7 @@ bool StorageManager::encryptedStorageAvailable() const {
 }
 
 void StorageManager::begin() {
-  _prefs.begin("brew-hlt", false);
+  _prefs.begin("env-ctrl", false);
   _lastSavedJson = _prefs.getString("cfg", "");
 }
 
@@ -21,19 +21,19 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.manualStageMinutes = 60;
   cfg.overTempC = 99.0f;
   cfg.tempOffsetC = 0.0f;
-  cfg.tempSmoothingAlpha = Config::DEFAULT_TEMP_SMOOTHING_ALPHA;
-  strncpy(cfg.mqttHost, "192.168.1.10", sizeof(cfg.mqttHost)-1);
-  cfg.mqttPort = Config::MQTT_PORT_PLAIN;
+  cfg.tempSmoothingAlpha = CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA;
+  strncpy(cfg.mqttHost, "10.42.0.1", sizeof(cfg.mqttHost)-1);
+  cfg.mqttPort = CoreConfig::MQTT_PORT_PLAIN;
   cfg.mqttUseTls = false;
   cfg.mqttTlsAuthMode = 0;
   cfg.mqttTlsFingerprint[0] = '\0';
   cfg.mqttTlsCaCert[0] = '\0';
   cfg.mqttCommsTimeoutSec = 0;
   cfg.mqttFallbackMode = MqttFallbackMode::HoldSetpoint;
-  cfg.wifiPortalTimeoutSec = Config::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC;
-  cfg.pidKp = Config::PID_KP;
-  cfg.pidKi = Config::PID_KI;
-  cfg.pidKd = Config::PID_KD;
+  cfg.wifiPortalTimeoutSec = CoreConfig::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC;
+  cfg.pidKp = CoreConfig::PID_KP;
+  cfg.pidKi = CoreConfig::PID_KI;
+  cfg.pidKd = CoreConfig::PID_KD;
   cfg.prevPidKp = cfg.pidKp;
   cfg.prevPidKi = cfg.pidKi;
   cfg.prevPidKd = cfg.pidKd;
@@ -100,18 +100,18 @@ bool StorageManager::load(PersistentConfig& cfg) {
   if (!profiles.isNull()) {
     cfg.profileCount = 0;
     for (JsonObject p : profiles) {
-      if (cfg.profileCount >= Config::MAX_PROFILES) break;
-      BrewProfile& profile = cfg.profiles[cfg.profileCount];
+      if (cfg.profileCount >= CoreConfig::MAX_PROFILES) break;
+      ProcessProfile& profile = cfg.profiles[cfg.profileCount];
       strlcpy(profile.name, p["name"] | "PROFILE", sizeof(profile.name));
       profile.stageCount = static_cast<uint8_t>(p["stageCount"] | 0);
-      if (profile.stageCount > Config::MAX_STAGES) profile.stageCount = Config::MAX_STAGES;
+      if (profile.stageCount > CoreConfig::MAX_STAGES) profile.stageCount = CoreConfig::MAX_STAGES;
 
       JsonArray stages = p["stages"].as<JsonArray>();
       uint8_t loadedStages = 0;
       if (!stages.isNull()) {
         for (JsonObject s : stages) {
-          if (loadedStages >= profile.stageCount || loadedStages >= Config::MAX_STAGES) break;
-          BrewStage& stage = profile.stages[loadedStages];
+          if (loadedStages >= profile.stageCount || loadedStages >= CoreConfig::MAX_STAGES) break;
+          ProcessStage& stage = profile.stages[loadedStages];
           strlcpy(stage.name, s["name"] | "STAGE", sizeof(stage.name));
           stage.targetC = s["targetC"] | 0.0f;
           stage.holdSeconds = s["holdSeconds"] | 0UL;
@@ -164,16 +164,16 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["activeProfileIndex"] = cfg.activeProfileIndex;
 
   JsonArray profiles = doc["profiles"].to<JsonArray>();
-  const uint8_t profileCount = (cfg.profileCount > Config::MAX_PROFILES) ? Config::MAX_PROFILES : cfg.profileCount;
+  const uint8_t profileCount = (cfg.profileCount > CoreConfig::MAX_PROFILES) ? CoreConfig::MAX_PROFILES : cfg.profileCount;
   for (uint8_t i = 0; i < profileCount; ++i) {
-    const BrewProfile& profile = cfg.profiles[i];
+    const ProcessProfile& profile = cfg.profiles[i];
     JsonObject p = profiles.add<JsonObject>();
     p["name"] = profile.name;
-    const uint8_t stageCount = (profile.stageCount > Config::MAX_STAGES) ? Config::MAX_STAGES : profile.stageCount;
+    const uint8_t stageCount = (profile.stageCount > CoreConfig::MAX_STAGES) ? CoreConfig::MAX_STAGES : profile.stageCount;
     p["stageCount"] = stageCount;
     JsonArray stages = p["stages"].to<JsonArray>();
     for (uint8_t j = 0; j < stageCount; ++j) {
-      const BrewStage& stage = profile.stages[j];
+      const ProcessStage& stage = profile.stages[j];
       JsonObject s = stages.add<JsonObject>();
       s["name"] = stage.name;
       s["targetC"] = stage.targetC;
