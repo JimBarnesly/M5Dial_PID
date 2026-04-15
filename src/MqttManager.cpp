@@ -1,5 +1,6 @@
 #include "MqttManager.h"
 #include "core/CoreConfig.h"
+#include "core/MqttTopics.h"
 #include "DebugControl.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -101,7 +102,7 @@ void MqttManager::tryReconnect() {
 }
 
 void MqttManager::subscribeTopics() {
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/cmd/#";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::CmdWildcard;
   _client.subscribe(topic.c_str());
 }
 
@@ -153,7 +154,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/status";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::Status;
   _client.publish(topic.c_str(), out.c_str(), true);
   publishShadow(rt, remainingSec);
 }
@@ -176,7 +177,7 @@ void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/shadow";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::Shadow;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -204,7 +205,7 @@ void MqttManager::publishCommandAck(const char* cmdId,
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/cmd_ack";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::EventCmdAck;
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -222,13 +223,13 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/status/calibration";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::StatusCalibration;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
 void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   if (!_client.connected() || !rt.pendingProfileCompletePublish) return;
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/profile_complete";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::EventProfileComplete;
   _client.publish(topic.c_str(), "true", true);
   rt.pendingProfileCompletePublish = false;
 }
@@ -260,7 +261,7 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/config/effective";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::ConfigEffective;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -281,7 +282,7 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
 
   String out;
   serializeJson(doc, out);
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/log";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::EventLog;
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 

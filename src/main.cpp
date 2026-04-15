@@ -20,6 +20,7 @@
 #include "DebugControl.h"
 #include "platform/m5dial/M5DialBuzzer.h"
 #include "platform/m5dial/M5DialDigitalOut.h"
+#include "core/MqttTopics.h"
 
 bool gDebugEnabled = true;
 bool gDebugDisableWifi = false;
@@ -266,7 +267,6 @@ enum class SettingsField : uint8_t {
   MqttTimeoutSec,
   MqttFallback,
   WifiPortalTimeoutSec,
-  MqttHost,
   MqttPort,
   PidKp,
   PidKi,
@@ -275,22 +275,6 @@ enum class SettingsField : uint8_t {
 };
 
 SettingsField gSettingsField = SettingsField::OverTemp;
-int gSettingsHostOctet = 0;
-
-static bool parseIpv4(const char* host, int octets[4]) {
-  if (!host) return false;
-  int consumed = 0;
-  int o0 = 0, o1 = 0, o2 = 0, o3 = 0;
-  if (sscanf(host, "%d.%d.%d.%d%n", &o0, &o1, &o2, &o3, &consumed) != 4) return false;
-  if (host[consumed] != '\0') return false;
-  if (o0 < 0 || o0 > 255 || o1 < 0 || o1 > 255 || o2 < 0 || o2 > 255 || o3 < 0 || o3 > 255) return false;
-  octets[0] = o0; octets[1] = o1; octets[2] = o2; octets[3] = o3;
-  return true;
-}
-
-static void formatIpv4(char* out, size_t outSize, const int octets[4]) {
-  snprintf(out, outSize, "%d.%d.%d.%d", octets[0], octets[1], octets[2], octets[3]);
-}
 
 static void refreshSettingsUiText() {
   switch (gSettingsField) {
@@ -303,10 +287,6 @@ static void refreshSettingsUiText() {
       if (gCfg.controlLock == ControlLock::LocalOnly) strlcpy(gRt.settingsValue, "LOCAL ONLY", sizeof(gRt.settingsValue));
       else if (gCfg.controlLock == ControlLock::RemoteOnly) strlcpy(gRt.settingsValue, "REMOTE ONLY", sizeof(gRt.settingsValue));
       else strlcpy(gRt.settingsValue, "LOCAL+REMOTE", sizeof(gRt.settingsValue));
-      break;
-    case SettingsField::MqttHost:
-      strlcpy(gRt.settingsLabel, "MQTT HOST", sizeof(gRt.settingsLabel));
-      snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%s [OCTET %d]", gCfg.mqttHost, gSettingsHostOctet + 1);
       break;
     case SettingsField::MqttTimeoutSec:
       strlcpy(gRt.settingsLabel, "MQTT TIMEOUT S", sizeof(gRt.settingsLabel));
@@ -346,7 +326,6 @@ static void refreshSettingsUiText() {
 static void enterSettingsMode() {
   gRt.uiMode = UiMode::SettingsAdjust;
   gSettingsField = SettingsField::OverTemp;
-  gSettingsHostOctet = 0;
   refreshSettingsUiText();
 }
 
@@ -375,25 +354,6 @@ static void persistActivePidAndQuality() {
   gCfg.prevPidKd = gRt.previousKd;
   gCfg.tuneQualityScore = gRt.autoTuneQualityScore;
   gStorage.save(gCfg);
-}
-
-static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
-  const char* portalHost = gWifi.getConfiguredMqttHost();
-  const uint16_t portalPort = gWifi.getConfiguredMqttPort();
-  bool changed = false;
-
-  if (portalHost && portalHost[0] != '\0' && strcmp(gCfg.mqttHost, portalHost) != 0) {
-    strlcpy(gCfg.mqttHost, portalHost, sizeof(gCfg.mqttHost));
-    changed = true;
-  }
-  if (gCfg.mqttPort != portalPort) {
-    gCfg.mqttPort = portalPort;
-    changed = true;
-  }
-  if (!changed) return;
-  DBG_PRINTF("WiFi portal config changed mqttHost=%s mqttPort=%u\n", gCfg.mqttHost, gCfg.mqttPort);
-  if (persist) gStorage.save(gCfg);
-  if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
 }
 
 static void debugPrintBootNetworkTargets() {
@@ -587,7 +547,7 @@ void handleCommands(const char* topic, const char* payload) {
                             gStages.getRemainingSeconds());
   };
 
-  if (t.endsWith("/cmd/setpoint")) {
+  if (t.endsWith(MqttTopics::Cmd::Setpoint)) {
     command = "setpoint";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -609,7 +569,7 @@ void handleCommands(const char* topic, const char* payload) {
       applied = false;
       reason = "wrong_run_state";
     }
-  } else if (t.endsWith("/cmd/over_temp")) {
+  } else if (t.endsWith(MqttTopics::Cmd::OverTemp)) {
     command = "over_temp";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -627,7 +587,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_range_over_temp";
       }
     }
-  } else if (t.endsWith("/cmd/control_lock")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ControlLock)) {
     command = "control_lock";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -647,25 +607,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_control_lock";
       }
     }
-  } else if (t.endsWith("/cmd/mqtt_host")) {
-    command = "mqtt_host";
-    accepted = true;
-    if (controlLockedLocalOnly) {
-      applied = false;
-      reason = "control_lock_local_only";
-    } else {
-      const char* host = doc["host"] | payload;
-      if (host && strlen(host) > 0 && strlen(host) < sizeof(gCfg.mqttHost)) {
-        strlcpy(gCfg.mqttHost, host, sizeof(gCfg.mqttHost));
-        gStorage.save(gCfg);
-        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-        gDisplay.invalidateAll();
-      } else {
-        applied = false;
-        reason = "invalid_mqtt_host";
-      }
-    }
-  } else if (t.endsWith("/cmd/mqtt_port")) {
+  } else if (t.endsWith(MqttTopics::Cmd::MqttPort)) {
     command = "mqtt_port";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -683,7 +625,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_mqtt_port";
       }
     }
-  } else if (t.endsWith("/cmd/mqtt_tls")) {
+  } else if (t.endsWith(MqttTopics::Cmd::MqttTls)) {
     command = "mqtt_tls";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -701,7 +643,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_mqtt_tls";
       }
     }
-  } else if (t.endsWith("/cmd/mqtt_timeout")) {
+  } else if (t.endsWith(MqttTopics::Cmd::MqttTimeout)) {
     command = "mqtt_timeout";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -719,7 +661,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_mqtt_timeout";
       }
     }
-  } else if (t.endsWith("/cmd/mqtt_fallback")) {
+  } else if (t.endsWith(MqttTopics::Cmd::MqttFallback)) {
     command = "mqtt_fallback";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -738,7 +680,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_mqtt_fallback";
       }
     }
-  } else if (t.endsWith("/cmd/wifi_portal_timeout")) {
+  } else if (t.endsWith(MqttTopics::Cmd::WifiPortalTimeout)) {
     command = "wifi_portal_timeout";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -756,7 +698,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_wifi_timeout";
       }
     }
-  } else if (t.endsWith("/cmd/reset_wifi")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ResetWifi)) {
     command = "reset_wifi";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -766,7 +708,7 @@ void handleCommands(const char* topic, const char* payload) {
       gWifi.resetSettings();
       logRuntimeEvent("WiFi settings reset (remote)");
     }
-  } else if (t.endsWith("/cmd/pid")) {
+  } else if (t.endsWith(MqttTopics::Cmd::Pid)) {
     command = "pid";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -789,7 +731,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_pid";
       }
     }
-  } else if (t.endsWith("/cmd/pid_kp")) {
+  } else if (t.endsWith(MqttTopics::Cmd::PidKp)) {
     command = "pid_kp";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -808,7 +750,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_pid_kp";
       }
     }
-  } else if (t.endsWith("/cmd/pid_ki")) {
+  } else if (t.endsWith(MqttTopics::Cmd::PidKi)) {
     command = "pid_ki";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -827,7 +769,7 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_pid_ki";
       }
     }
-  } else if (t.endsWith("/cmd/pid_kd")) {
+  } else if (t.endsWith(MqttTopics::Cmd::PidKd)) {
     command = "pid_kd";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -846,15 +788,15 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_pid_kd";
       }
     }
-  } else if (t.endsWith("/cmd/get_config")) {
+  } else if (t.endsWith(MqttTopics::Cmd::GetConfig)) {
     command = "get_config";
     accepted = true;
     if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-  } else if (t.endsWith("/cmd/get_events")) {
+  } else if (t.endsWith(MqttTopics::Cmd::GetEvents)) {
     command = "get_events";
     accepted = true;
     if (gRt.mqttConnected) gMqtt.publishEventLog(gRt);
-  } else if (t.endsWith("/cmd/profile_select")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ProfileSelect)) {
     command = "profile_select";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -874,7 +816,7 @@ void handleCommands(const char* topic, const char* payload) {
     gStorage.save(gCfg);
     logRuntimeEvent("Profile selected");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/profile_start")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ProfileStart)) {
     command = "profile_start";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -896,7 +838,7 @@ void handleCommands(const char* topic, const char* payload) {
     logRuntimeEvent("Profile run started");
     gStorage.save(gCfg);
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/profile_delete")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ProfileDelete)) {
     command = "profile_delete";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -921,7 +863,7 @@ void handleCommands(const char* topic, const char* payload) {
     gStorage.save(gCfg);
     logRuntimeEvent("Profile deleted");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/profile_upsert")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ProfileUpsert)) {
     command = "profile_upsert";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -941,7 +883,7 @@ void handleCommands(const char* topic, const char* payload) {
     if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
     logRuntimeEvent("Profile upserted");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/minutes")) {
+  } else if (t.endsWith(MqttTopics::Cmd::Minutes)) {
     command = "minutes";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -962,7 +904,7 @@ void handleCommands(const char* topic, const char* payload) {
     gRt.activeStageMinutes = gCfg.manualStageMinutes;
     gStorage.save(gCfg);
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/start")) {
+  } else if (t.endsWith(MqttTopics::Cmd::Start)) {
     command = "start";
     strlcpy(gRt.desiredRunAction, "start", sizeof(gRt.desiredRunAction));
     accepted = true;
@@ -982,7 +924,7 @@ void handleCommands(const char* topic, const char* payload) {
     gCompletionHandled = false;
     logRuntimeEvent("Run started");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/pause")) {
+  } else if (t.endsWith(MqttTopics::Cmd::Pause)) {
     command = "pause";
     strlcpy(gRt.desiredRunAction, "pause", sizeof(gRt.desiredRunAction));
     accepted = true;
@@ -1001,7 +943,7 @@ void handleCommands(const char* topic, const char* payload) {
     gStages.pause();
     logRuntimeEvent("Run paused");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/stop")) {
+  } else if (t.endsWith(MqttTopics::Cmd::Stop)) {
     command = "stop";
     strlcpy(gRt.desiredRunAction, "stop", sizeof(gRt.desiredRunAction));
     accepted = true;
@@ -1021,7 +963,7 @@ void handleCommands(const char* topic, const char* payload) {
     gCompletionHandled = false;
     logRuntimeEvent("Run stopped");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/reset_alarm")) {
+  } else if (t.endsWith(MqttTopics::Cmd::ResetAlarm)) {
     command = "reset_alarm";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -1034,7 +976,7 @@ void handleCommands(const char* topic, const char* payload) {
     syncAlarmFromManager();
     logRuntimeEvent("Alarm reset (remote)");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/ack_alarm")) {
+  } else if (t.endsWith(MqttTopics::Cmd::AckAlarm)) {
     command = "ack_alarm";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -1052,7 +994,7 @@ void handleCommands(const char* topic, const char* payload) {
     syncAlarmFromManager();
     logRuntimeEvent("Alarm acknowledged (remote)");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/start_autotune")) {
+  } else if (t.endsWith(MqttTopics::Cmd::StartAutotune)) {
     command = "start_autotune";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -1070,7 +1012,7 @@ void handleCommands(const char* topic, const char* payload) {
     startAutoTune();
     logRuntimeEvent("Autotune started");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/accept_tune")) {
+  } else if (t.endsWith(MqttTopics::Cmd::AcceptTune)) {
     command = "accept_tune";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -1093,7 +1035,7 @@ void handleCommands(const char* topic, const char* payload) {
     logRuntimeEvent("Autotune accepted");
     if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/reject_tune")) {
+  } else if (t.endsWith(MqttTopics::Cmd::RejectTune)) {
     command = "reject_tune";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -1113,7 +1055,7 @@ void handleCommands(const char* topic, const char* payload) {
     gRt.autoTuneQualityScore = 0.0f;
     logRuntimeEvent("Autotune rejected");
     gDisplay.invalidateAll();
-  } else if (t.endsWith("/cmd/temp_calibration")) {
+  } else if (t.endsWith(MqttTopics::Cmd::TempCalibration)) {
     command = "temp_calibration";
     accepted = true;
     if (controlLockedLocalOnly) {
@@ -1135,7 +1077,7 @@ void handleCommands(const char* topic, const char* payload) {
     gTempSensor.setSmoothingFactor(gCfg.tempSmoothingAlpha);
     gStorage.save(gCfg);
     if (gRt.mqttConnected) gMqtt.publishCalibrationStatus(gCfg, gRt);
-  } else if (t.endsWith("/cmd/calibration_status")) {
+  } else if (t.endsWith(MqttTopics::Cmd::CalibrationStatus)) {
     command = "calibration_status";
     accepted = true;
     if (gRt.mqttConnected) gMqtt.publishCalibrationStatus(gCfg, gRt);
@@ -1299,18 +1241,6 @@ void processInput() {
       int nextTimeout = static_cast<int>(gCfg.wifiPortalTimeoutSec) + static_cast<int>(diff * 5);
       gCfg.wifiPortalTimeoutSec = static_cast<uint16_t>(constrain(nextTimeout, 30, 1800));
       changed = true;
-    } else if (gSettingsField == SettingsField::MqttHost) {
-      int octets[4] = {192, 168, 1, 10};
-      parseIpv4(gCfg.mqttHost, octets);
-      if (M5Dial.BtnA.isPressed()) {
-        gSettingsHostOctet = (gSettingsHostOctet + (diff > 0 ? 1 : -1) + 4) % 4;
-      } else {
-        octets[gSettingsHostOctet] = constrain(octets[gSettingsHostOctet] + static_cast<int>(diff), 0, 255);
-        char hostBuf[64];
-        formatIpv4(hostBuf, sizeof(hostBuf), octets);
-        strlcpy(gCfg.mqttHost, hostBuf, sizeof(gCfg.mqttHost));
-        changed = true;
-      }
     } else if (gSettingsField == SettingsField::MqttPort) {
       int nextPort = static_cast<int>(gCfg.mqttPort) + static_cast<int>(diff);
       gCfg.mqttPort = static_cast<uint16_t>(constrain(nextPort, 1, 65535));
@@ -1480,18 +1410,11 @@ void setup() {
       logRuntimeEvent("WiFi settings reset (local boot hold)");
     }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
-    // Always sync portal MQTT host/port into runtime config after begin.
-    // Values may change even when save-callback timing differs across portal flows.
-    applyWifiPortalNetworkConfig(true, false);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
                gCfg.mqttHost,
                gCfg.mqttPort,
                static_cast<unsigned>(gCfg.wifiPortalTimeoutSec));
-    if (gWifi.hasPendingConfigUpdate()) {
-      applyWifiPortalNetworkConfig(true, false);
-      gWifi.clearPendingConfigUpdate();
-    }
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
@@ -1521,10 +1444,6 @@ void loop() {
 
   if (!debugWifiDisabledEffective()) {
     gWifi.update();
-    if (gWifi.hasPendingConfigUpdate()) {
-      applyWifiPortalNetworkConfig(true, true);
-      gWifi.clearPendingConfigUpdate();
-    }
     gRt.wifiConnected = gWifi.isConnected();
   } else {
     gRt.wifiConnected = false;
