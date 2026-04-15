@@ -377,25 +377,6 @@ static void persistActivePidAndQuality() {
   gStorage.save(gCfg);
 }
 
-static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
-  const char* portalHost = gWifi.getConfiguredMqttHost();
-  const uint16_t portalPort = gWifi.getConfiguredMqttPort();
-  bool changed = false;
-
-  if (portalHost && portalHost[0] != '\0' && strcmp(gCfg.mqttHost, portalHost) != 0) {
-    strlcpy(gCfg.mqttHost, portalHost, sizeof(gCfg.mqttHost));
-    changed = true;
-  }
-  if (gCfg.mqttPort != portalPort) {
-    gCfg.mqttPort = portalPort;
-    changed = true;
-  }
-  if (!changed) return;
-  DBG_PRINTF("WiFi portal config changed mqttHost=%s mqttPort=%u\n", gCfg.mqttHost, gCfg.mqttPort);
-  if (persist) gStorage.save(gCfg);
-  if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
-}
-
 static void debugPrintBootNetworkTargets() {
   String ssidStr = WiFi.SSID();
   const char* ssid = (ssidStr.length() > 0) ? ssidStr.c_str() : "<not-associated-yet>";
@@ -1480,18 +1461,11 @@ void setup() {
       logRuntimeEvent("WiFi settings reset (local boot hold)");
     }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
-    // Always sync portal MQTT host/port into runtime config after begin.
-    // Values may change even when save-callback timing differs across portal flows.
-    applyWifiPortalNetworkConfig(true, false);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
                gCfg.mqttHost,
                gCfg.mqttPort,
                static_cast<unsigned>(gCfg.wifiPortalTimeoutSec));
-    if (gWifi.hasPendingConfigUpdate()) {
-      applyWifiPortalNetworkConfig(true, false);
-      gWifi.clearPendingConfigUpdate();
-    }
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
                maskSecret(gWifi.getPortalApPassword()).c_str());
@@ -1521,10 +1495,6 @@ void loop() {
 
   if (!debugWifiDisabledEffective()) {
     gWifi.update();
-    if (gWifi.hasPendingConfigUpdate()) {
-      applyWifiPortalNetworkConfig(true, true);
-      gWifi.clearPendingConfigUpdate();
-    }
     gRt.wifiConnected = gWifi.isConnected();
   } else {
     gRt.wifiConnected = false;
