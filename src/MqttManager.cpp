@@ -102,8 +102,12 @@ void MqttManager::tryReconnect() {
 }
 
 void MqttManager::subscribeTopics() {
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::Command;
-  _client.subscribe(topic.c_str());
+  String commandTopic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::Command;
+  _client.subscribe(commandTopic.c_str());
+
+  // Backward compatibility: continue accepting direct per-command topics.
+  String legacyTopic = String(CoreConfig::MQTT_TOPIC_BASE) + "/cmd/+";
+  _client.subscribe(legacyTopic.c_str());
 }
 
 void MqttManager::handleMessage(char* topic, byte* payload, unsigned int length) {
