@@ -79,6 +79,7 @@ void MqttManager::tryReconnect() {
 
   if (ok) {
     DBG_LOGF("MQTT connected (%s:%u tls=%d)\n", _cfg->mqttHost, effectivePort(), _cfg->mqttUseTls);
+    Serial.printf("[MQTT] connected host=%s port=%u tls=%d\n", _cfg->mqttHost, effectivePort(), _cfg->mqttUseTls);
     subscribeTopics();
     _rt->lastValidMqttConnectionAtMs = millis();
   } else {
@@ -89,6 +90,13 @@ void MqttManager::tryReconnect() {
              _cfg->mqttUseTls,
              _rt ? _rt->wifiConnected : false,
              strlen(_cfg->mqttUser) > 0);
+    Serial.printf("[MQTT] reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
+                  _client.state(),
+                  _cfg->mqttHost,
+                  effectivePort(),
+                  _cfg->mqttUseTls,
+                  _rt ? _rt->wifiConnected : false,
+                  strlen(_cfg->mqttUser) > 0);
   }
 }
 
