@@ -1,5 +1,6 @@
 #include "MqttManager.h"
 #include "core/CoreConfig.h"
+#include "core/MqttTopics.h"
 #include "DebugControl.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -101,7 +102,7 @@ void MqttManager::tryReconnect() {
 }
 
 void MqttManager::subscribeTopics() {
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/cmd/#";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::Command;
   _client.subscribe(topic.c_str());
 }
 
@@ -149,11 +150,12 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["alarmText"] = rt.alarmText;
   doc["activeStage"] = activeStageName ? activeStageName : "";
   doc["remainingSec"] = remainingSec;
+  doc["_type"] = "status";
 
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/status";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
   _client.publish(topic.c_str(), out.c_str(), true);
   publishShadow(rt, remainingSec);
 }
@@ -172,11 +174,12 @@ void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
   reported["setpointC"] = rt.currentSetpointC;
   reported["effectiveTimerSec"] = remainingSec;
   reported["stageTimerStarted"] = rt.stageTimerStarted;
+  doc["_type"] = "shadow";
 
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/shadow";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -200,11 +203,12 @@ void MqttManager::publishCommandAck(const char* cmdId,
   reported["runState"] = runStateText(rt.runState);
   reported["setpointC"] = rt.currentSetpointC;
   reported["effectiveTimerSec"] = remainingSec;
+  doc["_type"] = "cmd_ack";
 
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/cmd_ack";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -218,18 +222,24 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   doc["rawTempC"] = rt.currentRawTempC;
   doc["sensorHealthy"] = rt.sensorHealthy;
   doc["tempPlausible"] = rt.tempPlausible;
+  doc["_type"] = "calibration_status";
 
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/status/calibration";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
 void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   if (!_client.connected() || !rt.pendingProfileCompletePublish) return;
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/profile_complete";
-  _client.publish(topic.c_str(), "true", true);
+  JsonDocument doc;
+  doc["_type"] = "profile_complete";
+  doc["value"] = true;
+  String out;
+  serializeJson(doc, out);
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  _client.publish(topic.c_str(), out.c_str(), true);
   rt.pendingProfileCompletePublish = false;
 }
 
@@ -256,11 +266,12 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["activePidKi"] = rt.currentKi;
   doc["activePidKd"] = rt.currentKd;
   doc["autoTuneQualityScore"] = cfg.tuneQualityScore;
+  doc["_type"] = "config_effective";
 
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/config/effective";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -278,10 +289,11 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
     item["text"] = ev.text;
   }
   doc["count"] = count;
+  doc["_type"] = "event_log";
 
   String out;
   serializeJson(doc, out);
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + "/event/log";
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
