@@ -1,6 +1,5 @@
 #include "MqttManager.h"
 #include "core/CoreConfig.h"
-#include "core/MqttTopics.h"
 #include "DebugControl.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
@@ -8,6 +7,9 @@
 
 MqttManager::MqttManager() : _client(_wifiClient) {}
 namespace {
+constexpr char kMqttCommandTopic[] = "/command";
+constexpr char kMqttStateTopic[] = "/state";
+
 const char* runStateText(RunState runState) {
   switch (runState) {
     case RunState::Idle: return "idle";
@@ -102,7 +104,7 @@ void MqttManager::tryReconnect() {
 }
 
 void MqttManager::subscribeTopics() {
-  String commandTopic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::Command;
+  String commandTopic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttCommandTopic;
   _client.subscribe(commandTopic.c_str());
 
   // Backward compatibility: continue accepting direct per-command topics.
@@ -159,7 +161,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), true);
   publishShadow(rt, remainingSec);
 }
@@ -183,7 +185,7 @@ void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -212,7 +214,7 @@ void MqttManager::publishCommandAck(const char* cmdId,
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -231,7 +233,7 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -242,7 +244,7 @@ void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   doc["value"] = true;
   String out;
   serializeJson(doc, out);
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), true);
   rt.pendingProfileCompletePublish = false;
 }
@@ -275,7 +277,7 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   String out;
   serializeJson(doc, out);
 
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -297,7 +299,7 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
 
   String out;
   serializeJson(doc, out);
-  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + MqttTopics::Topic::State;
+  String topic = String(CoreConfig::MQTT_TOPIC_BASE) + kMqttStateTopic;
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
