@@ -243,6 +243,7 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["overTempC"] = cfg.overTempC;
   doc["mqttHost"] = cfg.mqttHost;
   doc["mqttPort"] = cfg.mqttPort;
+  doc["mqttUseTls"] = cfg.mqttUseTls;
   doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
   doc["mqttFallbackMode"] = static_cast<uint8_t>(cfg.mqttFallbackMode);
   doc["wifiPortalTimeoutSec"] = cfg.wifiPortalTimeoutSec;

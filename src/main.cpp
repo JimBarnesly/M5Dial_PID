@@ -609,6 +609,24 @@ void handleCommands(const char* topic, const char* payload) {
         reason = "invalid_mqtt_port";
       }
     }
+  } else if (t.endsWith("/cmd/mqtt_tls")) {
+    command = "mqtt_tls";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const int tls = doc["enabled"] | parsePayloadInt(-1);
+      if (tls == 0 || tls == 1) {
+        gCfg.mqttUseTls = (tls == 1);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_tls";
+      }
+    }
   } else if (t.endsWith("/cmd/mqtt_timeout")) {
     command = "mqtt_timeout";
     accepted = true;
