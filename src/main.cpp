@@ -651,7 +651,7 @@ void handleCommands(const char* topic, const char* payload) {
         gCfg.localSetpointC = requested;
         gRt.currentSetpointC = gCfg.localSetpointC;
         gStorage.save(gCfg);
-        gDisplay.invalidateAll();
+        gDisplay.requestImmediateUi();
       }
     } else {
       applied = false;
