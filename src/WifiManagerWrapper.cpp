@@ -35,8 +35,13 @@ void WifiManagerWrapper::update() {
     _wm.process();
     if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
       _lastReconnectAttemptMs = millis();
-      Serial.println("[WiFi] reconnect attempt");
-      WiFi.reconnect();
+      if (WiFi.SSID().length() > 0) {
+        Serial.println("[WiFi] reconnect attempt using saved credentials");
+        WiFi.begin();
+      } else {
+        Serial.println("[WiFi] reconnect attempt");
+        WiFi.reconnect();
+      }
     }
   }
 }
