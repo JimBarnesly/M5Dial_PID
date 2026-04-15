@@ -229,7 +229,7 @@ void DisplayManager::drawRing(float progress, bool timerStarted, RunState runSta
   _lastRingMode = ringMode;
 }
 
-void DisplayManager::drawStagePill(const RuntimeState& rt, const BrewStage* stage, bool force) {
+void DisplayManager::drawStagePill(const RuntimeState& rt, const ProcessStage* stage, bool force) {
   const char* text = nullptr;
   if (rt.activeAlarm != AlarmCode::None) text = rt.alarmText;
   else if (rt.uiMode == UiMode::SetpointAdjust) text = "SET TEMP";
@@ -407,7 +407,7 @@ void DisplayManager::drawWifiIcon(const RuntimeState& rt, bool force) {
   _lastMqttConnected = rt.mqttConnected;
 }
 
-void DisplayManager::draw(const PersistentConfig&, const RuntimeState& rt, const BrewStage* stage, uint32_t remainingSec) {
+void DisplayManager::draw(const PersistentConfig&, const RuntimeState& rt, const ProcessStage* stage, uint32_t remainingSec) {
   const uint32_t now = millis();
   if (!_staticDrawn || _forceFull) drawStaticUi();
   if (!_forceFull && (now - _lastUiServiceMs < Config::UI_SERVICE_MS)) return;
