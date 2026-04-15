@@ -60,7 +60,6 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   buildPortalCredentials();
   loadSavedCredentials();
   WiFi.mode(WIFI_STA);
-  WiFi.persistent(true);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
   _wm.setDebugOutput(true);
