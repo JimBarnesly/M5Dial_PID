@@ -80,7 +80,7 @@ struct PersistentConfig {
   float overTempC {CoreConfig::DEFAULT_OVER_TEMP_C};
   float tempOffsetC {0.0f};
   float tempSmoothingAlpha {CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA};
-  char mqttHost[64] {"192.168.1.10"};
+  char mqttHost[64] {"10.42.0.1"};
   uint16_t mqttPort {CoreConfig::MQTT_PORT_PLAIN};
   char mqttUser[32] {""};
   char mqttPass[32] {""};

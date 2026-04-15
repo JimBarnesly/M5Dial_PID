@@ -22,7 +22,7 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.overTempC = 99.0f;
   cfg.tempOffsetC = 0.0f;
   cfg.tempSmoothingAlpha = CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA;
-  strncpy(cfg.mqttHost, "192.168.1.10", sizeof(cfg.mqttHost)-1);
+  strncpy(cfg.mqttHost, "10.42.0.1", sizeof(cfg.mqttHost)-1);
   cfg.mqttPort = CoreConfig::MQTT_PORT_PLAIN;
   cfg.mqttUseTls = false;
   cfg.mqttTlsAuthMode = 0;

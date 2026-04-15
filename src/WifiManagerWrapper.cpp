@@ -94,7 +94,7 @@ uint16_t WifiManagerWrapper::getConfiguredMqttPort() const {
 }
 
 void WifiManagerWrapper::applyPortalValues() {
-  if (_mqttHost[0] == '\0') strlcpy(_mqttHost, "192.168.1.10", sizeof(_mqttHost));
+  if (_mqttHost[0] == '\0') strlcpy(_mqttHost, "10.42.0.1", sizeof(_mqttHost));
   const int parsed = atoi(_mqttPort);
   if (parsed <= 0 || parsed > 65535) strlcpy(_mqttPort, "1883", sizeof(_mqttPort));
 }
