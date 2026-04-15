@@ -421,6 +421,42 @@ static void debugPrintBootNetworkTargets() {
   }
 }
 
+static void showBootInfoScreen(uint32_t durationMs = 5000) {
+  String ssid = WiFi.SSID();
+  if (ssid.length() == 0) ssid = "<not-associated>";
+
+  IPAddress mqttIp;
+  const bool mqttResolved = (gCfg.mqttHost[0] != '\0') && WiFi.hostByName(gCfg.mqttHost, mqttIp);
+  const String mqttIpText = mqttResolved ? mqttIp.toString() : String("<unresolved>");
+
+  auto& d = M5Dial.Display;
+  d.fillScreen(BLACK);
+  d.setTextColor(WHITE, BLACK);
+  d.setTextDatum(top_left);
+  d.setFont(&fonts::Font2);
+  d.drawString("Environment Controller", 8, 8);
+
+  d.setTextColor(GOLD, BLACK);
+  d.drawString(String("FW: ") + CoreConfig::FIRMWARE_VERSION, 8, 34);
+
+  d.setTextColor(CYAN, BLACK);
+  d.drawString(String("SSID: ") + ssid, 8, 60);
+
+  d.setTextColor(WHITE, BLACK);
+  d.drawString(String("MQTT Host: ") + gCfg.mqttHost, 8, 86);
+  d.drawString(String("MQTT IP: ") + mqttIpText, 8, 110);
+  d.drawString(String("Port/TLS: ") + String(gCfg.mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 134);
+
+  d.setTextColor(0xBDF7, BLACK);
+  d.drawString("Starting main screen...", 8, 168);
+
+  const uint32_t started = millis();
+  while (millis() - started < durationMs) {
+    M5Dial.update();
+    delay(20);
+  }
+}
+
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -1395,7 +1431,6 @@ void setup() {
   M5Dial.begin(cfg, true, false);
   M5Dial.Display.setRotation(0);
 
-  gDisplay.begin();
   gStorage.begin();
   gStorage.load(gCfg);
   gRt.currentSetpointC = gCfg.localSetpointC;
@@ -1454,6 +1489,8 @@ void setup() {
     gRt.mqttConnected = false;
   }
 
+  showBootInfoScreen(5000);
+  gDisplay.begin();
   gDisplay.invalidateAll();
   logRuntimeEvent("System booted");
   debugPrintState("setup");
