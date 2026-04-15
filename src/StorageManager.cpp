@@ -67,7 +67,9 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.tempOffsetC = doc["tempOffsetC"] | cfg.tempOffsetC;
   cfg.tempSmoothingAlpha = doc["tempSmoothingAlpha"] | cfg.tempSmoothingAlpha;
   cfg.controlLock = static_cast<ControlLock>((uint8_t)(doc["controlLock"] | (uint8_t)cfg.controlLock));
-  strlcpy(cfg.mqttHost, doc["mqttHost"] | cfg.mqttHost, sizeof(cfg.mqttHost));
+  const char* mqttHostDefault = "10.42.0.1";
+  const bool migrated = strcmp(doc["mqttHost"] | mqttHostDefault, mqttHostDefault) != 0;
+  strlcpy(cfg.mqttHost, mqttHostDefault, sizeof(cfg.mqttHost));
   cfg.mqttPort = doc["mqttPort"] | cfg.mqttPort;
   cfg.mqttUseTls = doc["mqttUseTls"] | cfg.mqttUseTls;
   cfg.mqttTlsAuthMode = doc["mqttTlsAuthMode"] | cfg.mqttTlsAuthMode;
@@ -128,6 +130,7 @@ bool StorageManager::load(PersistentConfig& cfg) {
   } else if (cfg.activeProfileIndex >= cfg.profileCount) {
     cfg.activeProfileIndex = static_cast<uint8_t>(cfg.profileCount - 1);
   }
+  if (migrated) save(cfg);
   return true;
 }
 
