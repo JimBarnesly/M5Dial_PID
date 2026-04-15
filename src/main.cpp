@@ -1464,6 +1464,9 @@ void setup() {
 
   if (!debugWifiDisabledEffective()) {
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
+    // Always sync portal MQTT host/port into runtime config after begin.
+    // Values may change even when save-callback timing differs across portal flows.
+    applyWifiPortalNetworkConfig(true, false);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
                gCfg.mqttHost,

@@ -39,7 +39,12 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
 
   buildPortalCredentials();
   gActiveWifiWrapper = this;
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(true);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
   _wm.setDebugOutput(true);
+  _wm.setConnectRetries(8);
   _wm.addParameter(_mqttHostParam);
   _wm.addParameter(_mqttPortParam);
   _wm.setSaveConfigCallback(WifiManagerWrapper::onSaveConfigCallback);
@@ -56,6 +61,11 @@ void WifiManagerWrapper::update() {
   if (_started) {
     _wm.process();
     if (_pendingConfigUpdate) applyPortalValues();
+    if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
+      _lastReconnectAttemptMs = millis();
+      Serial.println("[WiFi] reconnect attempt");
+      WiFi.reconnect();
+    }
   }
 }
 

@@ -23,6 +23,7 @@ private:
   WiFiManager _wm;
   bool _started {false};
   bool _pendingConfigUpdate {false};
+  uint32_t _lastReconnectAttemptMs {0};
   char _apName[32] {};
   char _apPass[20] {};
   char _mqttHost[64] {"192.168.1.10"};
