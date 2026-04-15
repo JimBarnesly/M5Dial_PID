@@ -2,14 +2,8 @@
 
 namespace MqttTopics {
 namespace Topic {
-constexpr char CmdWildcard[] = "/cmd/#";
-constexpr char Status[] = "/status";
-constexpr char Shadow[] = "/shadow";
-constexpr char EventCmdAck[] = "/event/cmd_ack";
-constexpr char StatusCalibration[] = "/status/calibration";
-constexpr char EventProfileComplete[] = "/event/profile_complete";
-constexpr char ConfigEffective[] = "/config/effective";
-constexpr char EventLog[] = "/event/log";
+constexpr char Command[] = "/command";
+constexpr char State[] = "/state";
 }  // namespace Topic
 
 namespace Cmd {

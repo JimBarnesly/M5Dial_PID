@@ -512,10 +512,52 @@ static void applyMqttTimeoutFallback() {
 }
 
 void handleCommands(const char* topic, const char* payload) {
-  DBG_PRINTF("MQTT cmd topic=%s payloadBytes=%u\n", topic, static_cast<unsigned>(strlen(payload)));
-  String t(topic);
+  const char* safeTopic = topic ? topic : "";
+  const char* safePayload = payload ? payload : "";
+  DBG_PRINTF("MQTT cmd topic=%s payloadBytes=%u\n", safeTopic, static_cast<unsigned>(strlen(safePayload)));
+  String t(safeTopic);
+  String payloadText(safePayload);
   JsonDocument doc;
-  deserializeJson(doc, payload);
+  DeserializationError parseErr = deserializeJson(doc, payloadText);
+  if (parseErr) {
+    String compact = payloadText;
+    compact.trim();
+    if (compact.startsWith("{") && compact.endsWith("}") && compact.indexOf(':') < 0) {
+      compact = compact.substring(1, compact.length() - 1);
+      compact.trim();
+      if (compact.length() > 0) parseErr = DeserializationError::Ok, doc[compact] = true;
+    } else if (compact.length() > 0 && compact.indexOf('{') < 0 && compact.indexOf(':') < 0) {
+      parseErr = DeserializationError::Ok;
+      doc[compact] = true;
+    }
+  }
+  if (parseErr) return;
+
+  if (t.endsWith(MqttTopics::Topic::Command)) {
+    String cmdKey;
+    if (doc["command"].is<const char*>()) cmdKey = doc["command"].as<const char*>();
+
+    if (cmdKey.length() == 0) {
+      JsonObject obj = doc.as<JsonObject>();
+      if (!obj.isNull() && obj.size() == 1) {
+        cmdKey = obj.begin()->key().c_str();
+      }
+    }
+
+    if (cmdKey.equalsIgnoreCase("run")) cmdKey = "start";
+    if (cmdKey.equalsIgnoreCase("setpoint") && !doc["setpoint"].isNull()) doc["setpointC"] = doc["setpoint"];
+    if (cmdKey.equalsIgnoreCase("over_temp") && !doc["over_temp"].isNull()) doc["overTempC"] = doc["over_temp"];
+    if (cmdKey.equalsIgnoreCase("mqtt_port") && !doc["mqtt_port"].isNull()) doc["port"] = doc["mqtt_port"];
+    if (cmdKey.equalsIgnoreCase("mqtt_tls") && !doc["mqtt_tls"].isNull()) doc["enabled"] = doc["mqtt_tls"];
+    if (cmdKey.equalsIgnoreCase("mqtt_timeout") && !doc["mqtt_timeout"].isNull()) doc["seconds"] = doc["mqtt_timeout"];
+    if (cmdKey.equalsIgnoreCase("wifi_portal_timeout") && !doc["wifi_portal_timeout"].isNull()) doc["seconds"] = doc["wifi_portal_timeout"];
+    if (cmdKey.equalsIgnoreCase("mqtt_fallback") && !doc["mqtt_fallback"].isNull()) doc["mode"] = doc["mqtt_fallback"];
+
+    if (cmdKey.length() > 0) {
+      t = String(CoreConfig::MQTT_TOPIC_BASE) + "/cmd/" + cmdKey;
+    }
+  }
+
   const char* command = "unknown";
   bool accepted = false;
   bool applied = true;
@@ -525,15 +567,15 @@ void handleCommands(const char* topic, const char* payload) {
 
   auto parsePayloadFloat = [&](float fallback) -> float {
     char* endPtr = nullptr;
-    const float parsed = strtof(payload, &endPtr);
-    if (endPtr != payload && endPtr && *endPtr == '\0' && isfinite(parsed)) return parsed;
+    const float parsed = strtof(safePayload, &endPtr);
+    if (endPtr != safePayload && endPtr && *endPtr == '\0' && isfinite(parsed)) return parsed;
     return fallback;
   };
 
   auto parsePayloadInt = [&](int fallback) -> int {
     char* endPtr = nullptr;
-    const long parsed = strtol(payload, &endPtr, 10);
-    if (endPtr != payload && endPtr && *endPtr == '\0') return static_cast<int>(parsed);
+    const long parsed = strtol(safePayload, &endPtr, 10);
+    if (endPtr != safePayload && endPtr && *endPtr == '\0') return static_cast<int>(parsed);
     return fallback;
   };
 
