@@ -2,7 +2,7 @@
 
 #include <DallasTemperature.h>
 #include <OneWire.h>
-#include "Config.h"
+#include "core/CoreConfig.h"
 
 class TempSensor {
 public:
@@ -25,8 +25,8 @@ private:
   float _lastRawC {NAN};
   float _lastC {NAN};
   float _calibrationOffsetC {0.0f};
-  float _smoothingAlpha {Config::DEFAULT_TEMP_SMOOTHING_ALPHA};
-  float _maxRateCPerSec {Config::DEFAULT_TEMP_MAX_RATE_C_PER_SEC};
+  float _smoothingAlpha {CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA};
+  float _maxRateCPerSec {CoreConfig::DEFAULT_TEMP_MAX_RATE_C_PER_SEC};
   bool _healthy {false};
   bool _plausible {true};
   bool _newValue {false};

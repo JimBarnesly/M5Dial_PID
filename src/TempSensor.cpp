@@ -1,5 +1,5 @@
 #include "TempSensor.h"
-#include "Config.h"
+#include "core/CoreConfig.h"
 
 TempSensor::TempSensor(uint8_t pin) : _oneWire(pin), _sensors(&_oneWire) {}
 
@@ -16,15 +16,15 @@ void TempSensor::begin() {
 void TempSensor::update() {
   _newValue = false;
 
-  if (millis() - _lastRequestMs < Config::TEMP_SAMPLE_MS) {
+  if (millis() - _lastRequestMs < CoreConfig::TEMP_SAMPLE_MS) {
     return;
   }
 
   float tempC = _sensors.getTempC(_address);
   _lastRawC = tempC;
   _plausible = true;
-  _healthy = tempC > Config::SENSOR_FAULT_LOW_C &&
-             tempC < Config::SENSOR_FAULT_HIGH_C &&
+  _healthy = tempC > CoreConfig::SENSOR_FAULT_LOW_C &&
+             tempC < CoreConfig::SENSOR_FAULT_HIGH_C &&
              tempC != DEVICE_DISCONNECTED_C;
 
   if (_healthy) {
