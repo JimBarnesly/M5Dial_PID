@@ -417,9 +417,18 @@ static void showBootInfoScreen(uint32_t durationMs = 5000) {
   }
 }
 
-static bool shouldResetWifiFromBootHold(uint32_t holdMs = 3000) {
+static bool shouldResetWifiFromBootHold(uint32_t holdMs = 8000, uint32_t settleMs = 250) {
   // Hold BtnA during boot to intentionally clear saved Wi-Fi credentials.
-  // This check runs before WiFi begin so it can force portal onboarding.
+  // Keep this deliberately long so normal power-on button presses don't wipe Wi-Fi.
+  // The settle period avoids false positives during early input initialization.
+  const uint32_t settleStart = millis();
+  while (millis() - settleStart < settleMs) {
+    M5Dial.update();
+    delay(10);
+  }
+
+  if (!M5Dial.BtnA.isPressed()) return false;
+
   const uint32_t started = millis();
   while (millis() - started < holdMs) {
     M5Dial.update();
