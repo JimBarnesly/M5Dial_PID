@@ -2,25 +2,44 @@
 #include "core/CoreConfig.h"
 #include <WiFi.h>
 
-void WifiManagerWrapper::handleWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
-  if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED || event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-    _authExpireCount = 0;
-    _portalForcedDueToAuthExpire = false;
-    return;
-  }
-  if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
+void WifiManagerWrapper::loadSavedCredentials() {
+  if (_credentialsLoaded) return;
+  _wifiPrefs.begin("wifi-cred", false);
+  _savedSsid = _wifiPrefs.getString("ssid", "");
+  _savedPass = _wifiPrefs.getString("pass", "");
+  _haveSavedCredentials = !_savedSsid.isEmpty();
+  _credentialsLoaded = true;
+}
 
-  if (info.wifi_sta_disconnected.reason == WIFI_REASON_AUTH_EXPIRE) {
-    if (_authExpireCount < 255) ++_authExpireCount;
-    if (_authExpireCount >= 5 && !_portalForcedDueToAuthExpire) {
-      Serial.println("[WiFi] AUTH_EXPIRE repeated; clearing saved STA creds and reopening config portal");
-      _wm.resetSettings();
-      _wm.startConfigPortal(_apName, _apPass);
-      _portalForcedDueToAuthExpire = true;
+void WifiManagerWrapper::saveCurrentCredentials() {
+  loadSavedCredentials();
+  const String currentSsid = WiFi.SSID();
+  if (currentSsid.isEmpty() || currentSsid == _lastPersistedSsid) return;
+  const String currentPass = WiFi.psk();
+  _wifiPrefs.putString("ssid", currentSsid);
+  _wifiPrefs.putString("pass", currentPass);
+  _savedSsid = currentSsid;
+  _savedPass = currentPass;
+  _lastPersistedSsid = currentSsid;
+  _haveSavedCredentials = true;
+  Serial.printf("[WiFi] persisted credentials for SSID=%s\n", currentSsid.c_str());
+}
+
+bool WifiManagerWrapper::connectWithSavedCredentials(uint32_t timeoutMs) {
+  loadSavedCredentials();
+  if (!_haveSavedCredentials) return false;
+
+  Serial.printf("[WiFi] attempting saved credentials SSID=%s\n", _savedSsid.c_str());
+  WiFi.begin(_savedSsid.c_str(), _savedPass.c_str());
+  const uint32_t started = millis();
+  while (millis() - started < timeoutMs) {
+    if (WiFi.status() == WL_CONNECTED) {
+      saveCurrentCredentials();
+      return true;
     }
-  } else {
-    _authExpireCount = 0;
+    delay(50);
   }
+  return WiFi.status() == WL_CONNECTED;
 }
 
 void WifiManagerWrapper::buildPortalCredentials() {
@@ -39,6 +58,7 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   (void)defaultMqttPort;
 
   buildPortalCredentials();
+  loadSavedCredentials();
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
@@ -46,19 +66,21 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   _wm.setConnectRetries(8);
   _wm.setConfigPortalBlocking(false);
   _wm.setConfigPortalTimeout(portalTimeoutSec);
-  _wifiEventHandler = WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
-    handleWifiEvent(event, info);
-  });
-  _wm.autoConnect(_apName, _apPass);
+  const bool restored = connectWithSavedCredentials();
+  if (!restored) _wm.autoConnect(_apName, _apPass);
   _started = true;
 }
 
 void WifiManagerWrapper::update() {
   if (_started) {
     _wm.process();
+    if (WiFi.status() == WL_CONNECTED) saveCurrentCredentials();
     if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
       _lastReconnectAttemptMs = millis();
-      if (WiFi.SSID().length() > 0) {
+      if (_haveSavedCredentials) {
+        Serial.println("[WiFi] reconnect attempt using persisted credentials");
+        WiFi.begin(_savedSsid.c_str(), _savedPass.c_str());
+      } else if (WiFi.SSID().length() > 0) {
         Serial.println("[WiFi] reconnect attempt using saved credentials");
         WiFi.begin();
       } else {
@@ -83,4 +105,11 @@ const char* WifiManagerWrapper::getPortalApPassword() const {
 
 void WifiManagerWrapper::resetSettings() {
   _wm.resetSettings();
+  loadSavedCredentials();
+  _wifiPrefs.remove("ssid");
+  _wifiPrefs.remove("pass");
+  _savedSsid = "";
+  _savedPass = "";
+  _lastPersistedSsid = "";
+  _haveSavedCredentials = false;
 }

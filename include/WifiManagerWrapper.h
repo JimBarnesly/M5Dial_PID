@@ -1,6 +1,6 @@
 #pragma once
 #include <WiFiManager.h>
-#include <WiFi.h>
+#include <Preferences.h>
 
 class WifiManagerWrapper {
 public:
@@ -15,12 +15,17 @@ public:
 
 private:
   void buildPortalCredentials();
-  void handleWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info);
+  void loadSavedCredentials();
+  void saveCurrentCredentials();
+  bool connectWithSavedCredentials(uint32_t timeoutMs = 15000);
   WiFiManager _wm;
-  WiFiEventId_t _wifiEventHandler {};
+  Preferences _wifiPrefs;
   bool _started {false};
-  bool _portalForcedDueToAuthExpire {false};
-  uint8_t _authExpireCount {0};
+  bool _haveSavedCredentials {false};
+  bool _credentialsLoaded {false};
+  String _savedSsid;
+  String _savedPass;
+  String _lastPersistedSsid;
   uint32_t _lastReconnectAttemptMs {0};
   char _apName[32] {};
   char _apPass[20] {};
