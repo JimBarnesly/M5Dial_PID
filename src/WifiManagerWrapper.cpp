@@ -19,7 +19,6 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
 
   buildPortalCredentials();
   WiFi.mode(WIFI_STA);
-  WiFi.persistent(true);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
   _wm.setDebugOutput(true);
@@ -35,8 +34,13 @@ void WifiManagerWrapper::update() {
     _wm.process();
     if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
       _lastReconnectAttemptMs = millis();
-      Serial.println("[WiFi] reconnect attempt");
-      WiFi.reconnect();
+      if (WiFi.SSID().length() > 0) {
+        Serial.println("[WiFi] reconnect attempt using stored STA credentials");
+        WiFi.begin();
+      } else {
+        Serial.println("[WiFi] reconnect attempt");
+        WiFi.reconnect();
+      }
     }
   }
 }

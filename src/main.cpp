@@ -417,18 +417,6 @@ static void showBootInfoScreen(uint32_t durationMs = 5000) {
   }
 }
 
-static bool shouldResetWifiFromBootHold(uint32_t holdMs = 3000) {
-  // Hold BtnA during boot to intentionally clear saved Wi-Fi credentials.
-  // This check runs before WiFi begin so it can force portal onboarding.
-  const uint32_t started = millis();
-  while (millis() - started < holdMs) {
-    M5Dial.update();
-    if (!M5Dial.BtnA.isPressed()) return false;
-    delay(10);
-  }
-  return true;
-}
-
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -1451,10 +1439,6 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
-    if (shouldResetWifiFromBootHold()) {
-      gWifi.resetSettings();
-      logRuntimeEvent("WiFi settings reset (local boot hold)");
-    }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
