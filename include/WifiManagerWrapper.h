@@ -10,24 +10,13 @@ public:
   bool isConnected() const;
   const char* getPortalApName() const;
   const char* getPortalApPassword() const;
-  bool hasPendingConfigUpdate() const;
-  void clearPendingConfigUpdate();
-  const char* getConfiguredMqttHost() const;
-  uint16_t getConfiguredMqttPort() const;
   void resetSettings();
 
 private:
-  static void onSaveConfigCallback();
   void buildPortalCredentials();
-  void applyPortalValues();
   WiFiManager _wm;
   bool _started {false};
-  bool _pendingConfigUpdate {false};
   uint32_t _lastReconnectAttemptMs {0};
   char _apName[32] {};
   char _apPass[20] {};
-  char _mqttHost[64] {"10.42.0.1"};
-  char _mqttPort[8] {"1883"};
-  WiFiManagerParameter* _mqttHostParam {nullptr};
-  WiFiManagerParameter* _mqttPortParam {nullptr};
 };
