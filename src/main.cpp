@@ -554,7 +554,11 @@ void handleCommands(const char* topic, const char* payload) {
     if (cmdKey.equalsIgnoreCase("mqtt_fallback") && !doc["mqtt_fallback"].isNull()) doc["mode"] = doc["mqtt_fallback"];
 
     if (cmdKey.length() > 0) {
-      t = String(CoreConfig::MQTT_TOPIC_BASE) + "/cmd/" + cmdKey;
+      cmdKey.trim();
+      cmdKey.toLowerCase();
+      if (!cmdKey.startsWith("/")) cmdKey = "/" + cmdKey;
+      if (!cmdKey.startsWith("/cmd/")) cmdKey = "/cmd" + cmdKey;
+      t = String(CoreConfig::MQTT_TOPIC_BASE) + cmdKey;
     }
   }
 
