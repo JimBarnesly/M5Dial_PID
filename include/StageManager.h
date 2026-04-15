@@ -10,12 +10,12 @@ public:
   void resume();
   void stop();
   void update(float currentTempC);
-  const BrewProfile* getActiveProfile() const;
-  const BrewStage* getCurrentStage() const;
+  const ProcessProfile* getActiveProfile() const;
+  const ProcessStage* getCurrentStage() const;
   uint32_t getRemainingSeconds() const;
 
 private:
   PersistentConfig* _cfg {nullptr};
   RuntimeState* _rt {nullptr};
-  mutable BrewStage _manualStage {};
+  mutable ProcessStage _manualStage {};
 };
