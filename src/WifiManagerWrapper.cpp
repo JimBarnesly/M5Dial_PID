@@ -7,38 +7,77 @@ void WifiManagerWrapper::loadSavedCredentials() {
   _wifiPrefs.begin("wifi-cred", false);
   _savedSsid = _wifiPrefs.getString("ssid", "");
   _savedPass = _wifiPrefs.getString("pass", "");
-  _haveSavedCredentials = !_savedSsid.isEmpty();
+
+  // If an SSID exists but the password is blank, assume a prior bad write and
+  // do not use the persisted pair. Fall back to the SDK-saved station config.
+  if (!_savedSsid.isEmpty() && _savedPass.isEmpty()) {
+    Serial.printf("[WiFi] ignoring persisted credentials for SSID=%s because password is blank\n",
+                  _savedSsid.c_str());
+    _wifiPrefs.remove("ssid");
+    _wifiPrefs.remove("pass");
+    _savedSsid = "";
+    _savedPass = "";
+  }
+
+  _haveSavedCredentials = !_savedSsid.isEmpty() && !_savedPass.isEmpty();
   _credentialsLoaded = true;
 }
 
 void WifiManagerWrapper::saveCurrentCredentials() {
-  loadSavedCredentials();
-  const String currentSsid = WiFi.SSID();
-  if (currentSsid.isEmpty() || currentSsid == _lastPersistedSsid) return;
-  const String currentPass = WiFi.psk();
-  _wifiPrefs.putString("ssid", currentSsid);
-  _wifiPrefs.putString("pass", currentPass);
-  _savedSsid = currentSsid;
-  _savedPass = currentPass;
-  _lastPersistedSsid = currentSsid;
-  _haveSavedCredentials = true;
-  Serial.printf("[WiFi] persisted credentials for SSID=%s\n", currentSsid.c_str());
+  // Intentionally disabled.
+  // Do not persist credentials from WiFi runtime state; WiFi.psk() is not a
+  // reliable source after reconnect/restore and can overwrite the stored
+  // password with an empty string.
 }
 
 bool WifiManagerWrapper::connectWithSavedCredentials(uint32_t timeoutMs) {
   loadSavedCredentials();
   if (!_haveSavedCredentials) return false;
 
-  Serial.printf("[WiFi] attempting saved credentials SSID=%s\n", _savedSsid.c_str());
+  Serial.printf("[WiFi] attempting persisted credentials SSID=%s\n", _savedSsid.c_str());
+  WiFi.disconnect(true, false);
+  delay(200);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  delay(100);
   WiFi.begin(_savedSsid.c_str(), _savedPass.c_str());
+
   const uint32_t started = millis();
   while (millis() - started < timeoutMs) {
-    if (WiFi.status() == WL_CONNECTED) {
-      saveCurrentCredentials();
+    wl_status_t st = WiFi.status();
+    if (st == WL_CONNECTED) {
+      Serial.println("[WiFi] persisted credential connect success");
       return true;
     }
     delay(50);
   }
+
+  Serial.printf("[WiFi] persisted credential connect failed, status=%d\n",
+                static_cast<int>(WiFi.status()));
+  return WiFi.status() == WL_CONNECTED;
+}
+
+bool WifiManagerWrapper::connectWithSdkSavedCredentials(uint32_t timeoutMs) {
+  Serial.println("[WiFi] attempting SDK-saved credentials");
+  WiFi.disconnect(true, false);
+  delay(200);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  delay(100);
+  WiFi.begin();
+
+  const uint32_t started = millis();
+  while (millis() - started < timeoutMs) {
+    wl_status_t st = WiFi.status();
+    if (st == WL_CONNECTED) {
+      Serial.println("[WiFi] SDK-saved credential connect success");
+      return true;
+    }
+    delay(50);
+  }
+
+  Serial.printf("[WiFi] SDK-saved credential connect failed, status=%d\n",
+                static_cast<int>(WiFi.status()));
   return WiFi.status() == WL_CONNECTED;
 }
 
@@ -66,28 +105,51 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   _wm.setConnectRetries(8);
   _wm.setConfigPortalBlocking(false);
   _wm.setConfigPortalTimeout(portalTimeoutSec);
-  const bool restored = connectWithSavedCredentials();
-  if (!restored) _wm.autoConnect(_apName, _apPass);
+
+  bool restored = connectWithSavedCredentials();
+  if (!restored) {
+    restored = connectWithSdkSavedCredentials();
+  }
+  if (!restored) {
+    _wm.autoConnect(_apName, _apPass);
+  }
   _started = true;
 }
 
 void WifiManagerWrapper::update() {
-  if (_started) {
-    _wm.process();
-    if (WiFi.status() == WL_CONNECTED) saveCurrentCredentials();
-    if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
-      _lastReconnectAttemptMs = millis();
-      if (_haveSavedCredentials) {
-        Serial.println("[WiFi] reconnect attempt using persisted credentials");
-        WiFi.begin(_savedSsid.c_str(), _savedPass.c_str());
-      } else if (WiFi.SSID().length() > 0) {
-        Serial.println("[WiFi] reconnect attempt using saved credentials");
-        WiFi.begin();
-      } else {
-        Serial.println("[WiFi] reconnect attempt");
-        WiFi.reconnect();
-      }
-    }
+  if (!_started) return;
+
+  _wm.process();
+
+  wl_status_t st = WiFi.status();
+  if (st == WL_CONNECTED) {
+    return;
+  }
+
+  // Avoid starting a new connection attempt while the station is already busy.
+  if (st == WL_IDLE_STATUS) {
+    return;
+  }
+
+  if (millis() - _lastReconnectAttemptMs <= 10000) {
+    return;
+  }
+
+  _lastReconnectAttemptMs = millis();
+  Serial.printf("[WiFi] reconnect attempt, status=%d\n", static_cast<int>(st));
+
+  WiFi.disconnect(false, false);
+  delay(100);
+
+  if (_haveSavedCredentials) {
+    Serial.println("[WiFi] reconnect attempt using persisted credentials");
+    WiFi.begin(_savedSsid.c_str(), _savedPass.c_str());
+  } else if (WiFi.SSID().length() > 0) {
+    Serial.println("[WiFi] reconnect attempt using SDK-saved credentials");
+    WiFi.begin();
+  } else {
+    Serial.println("[WiFi] reconnect attempt");
+    WiFi.reconnect();
   }
 }
 
