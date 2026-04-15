@@ -395,17 +395,6 @@ static void applyWifiPortalNetworkConfig(bool persist, bool publishConfig) {
   if (publishConfig && gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
 }
 
-static bool shouldResetWifiFromBootHold() {
-  const uint32_t holdWindowMs = 3000;
-  const uint32_t started = millis();
-  while (millis() - started < holdWindowMs) {
-    M5Dial.update();
-    if (!M5Dial.BtnA.isPressed()) return false;
-    delay(10);
-  }
-  return true;
-}
-
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -618,6 +607,24 @@ void handleCommands(const char* topic, const char* payload) {
       } else {
         applied = false;
         reason = "invalid_mqtt_port";
+      }
+    }
+  } else if (t.endsWith("/cmd/mqtt_tls")) {
+    command = "mqtt_tls";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else {
+      const int tls = doc["enabled"] | parsePayloadInt(-1);
+      if (tls == 0 || tls == 1) {
+        gCfg.mqttUseTls = (tls == 1);
+        gStorage.save(gCfg);
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+        gDisplay.invalidateAll();
+      } else {
+        applied = false;
+        reason = "invalid_mqtt_tls";
       }
     }
   } else if (t.endsWith("/cmd/mqtt_timeout")) {
@@ -1395,10 +1402,6 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
-    if (shouldResetWifiFromBootHold()) {
-      gWifi.resetSettings();
-      logRuntimeEvent("WiFi settings reset (local boot hold)");
-    }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
                gCfg.mqttHost,
