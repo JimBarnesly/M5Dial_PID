@@ -605,7 +605,7 @@ void handleCommands(const char* topic, const char* payload) {
       cmdKey.toLowerCase();
       if (!cmdKey.startsWith("/")) cmdKey = "/" + cmdKey;
       if (!cmdKey.startsWith("/cmd/")) cmdKey = "/cmd" + cmdKey;
-      t = String(CoreConfig::MQTT_TOPIC_BASE) + cmdKey;
+      t = CoreConfig::mqttTopicBase() + cmdKey;
     }
   }
 
