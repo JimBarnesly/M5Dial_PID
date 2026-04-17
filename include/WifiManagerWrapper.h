@@ -18,7 +18,6 @@ private:
   void loadSavedCredentials();
   void saveCurrentCredentials();
   bool connectWithSavedCredentials(uint32_t timeoutMs = 15000);
-  bool connectWithSdkSavedCredentials(uint32_t timeoutMs = 15000);
   WiFiManager _wm;
   Preferences _wifiPrefs;
   bool _started {false};
