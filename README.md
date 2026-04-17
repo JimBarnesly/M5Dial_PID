@@ -114,6 +114,7 @@ This firmware generates onboarding AP credentials per-device and supports secure
 - The AP SSID is generated per-device from hardware identity.
 - The AP password is derived from the device identity (MAC suffix) and printed in masked form on serial debug logs.
 - In serial debug logs, the AP password is masked so full credentials are not exposed.
+- Forced development Wi-Fi credentials are now opt-in only. Define `DEV_FORCE_WIFI_CREDENTIALS` at build time if you explicitly want the legacy forced-SSID behavior for development labs.
 
 ### 2) MQTT security modes
 Set these `PersistentConfig` fields before deployment (via your existing config channel):
