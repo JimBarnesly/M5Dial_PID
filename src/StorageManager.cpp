@@ -23,8 +23,8 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.tempOffsetC = 0.0f;
   cfg.tempSmoothingAlpha = CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA;
   strncpy(cfg.mqttHost, "10.42.0.1", sizeof(cfg.mqttHost)-1);
-  cfg.mqttPort = CoreConfig::MQTT_PORT_PLAIN;
-  cfg.mqttUseTls = false;
+  cfg.mqttPort = CoreConfig::MQTT_PORT_TLS;
+  cfg.mqttUseTls = true;
   cfg.mqttTlsAuthMode = 0;
   cfg.mqttTlsFingerprint[0] = '\0';
   cfg.mqttTlsCaCert[0] = '\0';

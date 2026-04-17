@@ -81,10 +81,10 @@ struct PersistentConfig {
   float tempOffsetC {0.0f};
   float tempSmoothingAlpha {CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA};
   char mqttHost[64] {"10.42.0.1"};
-  uint16_t mqttPort {CoreConfig::MQTT_PORT_PLAIN};
+  uint16_t mqttPort {CoreConfig::MQTT_PORT_TLS};
   char mqttUser[32] {""};
   char mqttPass[32] {""};
-  bool mqttUseTls {false};
+  bool mqttUseTls {true};
   uint8_t mqttTlsAuthMode {0};  // 0=none, 1=fingerprint pin, 2=CA cert pin
   char mqttTlsFingerprint[96] {""};  // e.g. AA:BB:...
   char mqttTlsCaCert[768] {""};      // PEM

@@ -3,8 +3,15 @@
 #include <WiFi.h>
 
 namespace {
+#if defined(DEV_FORCE_WIFI_CREDENTIALS)
 constexpr char kForcedSsid[] = "project6";
 constexpr char kForcedPass[] = "sIlver@99";
+constexpr bool kUseForcedCredentials = true;
+#else
+constexpr char kForcedSsid[] = "";
+constexpr char kForcedPass[] = "";
+constexpr bool kUseForcedCredentials = false;
+#endif
 }
 
 void WifiManagerWrapper::loadSavedCredentials() {
@@ -91,20 +98,26 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   _wm.setConfigPortalBlocking(false);
   _wm.setConfigPortalTimeout(portalTimeoutSec);
 
-  Serial.printf("[WiFi] attempting forced credentials SSID=%s\n", kForcedSsid);
-  WiFi.begin(kForcedSsid, kForcedPass);
-  const uint32_t forcedStart = millis();
-  while (millis() - forcedStart < 15000) {
-    if (WiFi.status() == WL_CONNECTED) break;
-    delay(50);
+  bool connected = false;
+  if (kUseForcedCredentials) {
+    Serial.printf("[WiFi] attempting forced credentials SSID=%s\n", kForcedSsid);
+    WiFi.begin(kForcedSsid, kForcedPass);
+    const uint32_t forcedStart = millis();
+    while (millis() - forcedStart < 15000) {
+      if (WiFi.status() == WL_CONNECTED) break;
+      delay(50);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      _savedSsid = kForcedSsid;
+      _savedPass = kForcedPass;
+      _haveSavedCredentials = true;
+      saveCurrentCredentials();
+      connected = true;
+    }
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    _savedSsid = kForcedSsid;
-    _savedPass = kForcedPass;
-    _haveSavedCredentials = true;
-    saveCurrentCredentials();
-  } else {
+  if (!connected) {
     const bool restored = connectWithSavedCredentials();
     if (!restored) _wm.autoConnect(_apName, _apPass);
   }
@@ -115,7 +128,9 @@ void WifiManagerWrapper::update() {
   if (_started) {
     _wm.process();
     if (WiFi.status() == WL_CONNECTED) saveCurrentCredentials();
-    if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
+    if (kUseForcedCredentials &&
+        WiFi.status() != WL_CONNECTED &&
+        millis() - _lastReconnectAttemptMs > 10000) {
       _lastReconnectAttemptMs = millis();
       Serial.println("[WiFi] reconnect attempt using forced credentials");
       WiFi.begin(kForcedSsid, kForcedPass);
