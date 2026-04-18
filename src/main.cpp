@@ -440,13 +440,16 @@ static void debugPrintBootNetworkTargets() {
   }
 }
 
-static void showBootInfoScreen(uint32_t durationMs = 5000) {
+static void showBootInfoScreen(uint32_t durationMs = 30000) {
   String ssid = WiFi.SSID();
   if (ssid.length() == 0) ssid = "<not-associated>";
 
   IPAddress mqttIp;
   const bool mqttResolved = (gCfg.mqttHost[0] != '\0') && WiFi.hostByName(gCfg.mqttHost, mqttIp);
   const String mqttIpText = mqttResolved ? mqttIp.toString() : String("<unresolved>");
+  const String mqttTopicBase = CoreConfig::mqttTopicBase();
+  const String mqttCommandTopic = mqttTopicBase + "/command";
+  const String mqttStateTopic = mqttTopicBase + "/state";
 
   auto& d = M5Dial.Display;
   d.fillScreen(BLACK);
@@ -465,15 +468,56 @@ static void showBootInfoScreen(uint32_t durationMs = 5000) {
   d.drawString(String("MQTT Host: ") + gCfg.mqttHost, 8, 86);
   d.drawString(String("MQTT IP: ") + mqttIpText, 8, 110);
   d.drawString(String("Port/TLS: ") + String(gCfg.mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 134);
+  d.drawString(String("Client ID: ") + gMqtt.clientId(), 8, 158);
+  d.drawString(String("Pub: ") + mqttCommandTopic, 8, 182);
+  d.drawString(String("Sub: ") + mqttStateTopic, 8, 206);
 
   d.setTextColor(0xBDF7, BLACK);
-  d.drawString("Starting main screen...", 8, 168);
+  d.drawString("Press button to continue...", 8, 228);
 
   const uint32_t started = millis();
   while (millis() - started < durationMs) {
     M5Dial.update();
+    if (M5Dial.BtnA.wasClicked()) break;
     delay(20);
   }
+}
+
+static bool shouldResetWifiOnBootHold(uint32_t promptWindowMs = 4000, uint32_t holdThresholdMs = 1200) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(BLACK);
+  d.setTextColor(ORANGE, BLACK);
+  d.setTextDatum(top_left);
+  d.setFont(&fonts::Font2);
+  d.drawString("Hold button to reset WiFi", 8, 88);
+  d.setTextColor(WHITE, BLACK);
+  d.drawString("Hold >=1.2s (window 4s)", 8, 112);
+  d.drawString("Release after beep", 8, 136);
+
+  const uint32_t started = millis();
+  uint32_t pressedAt = 0;
+  bool pressed = false;
+  while (millis() - started < promptWindowMs) {
+    M5Dial.update();
+    if (M5Dial.BtnA.wasPressed()) {
+      pressed = true;
+      pressedAt = millis();
+    }
+    if (M5Dial.BtnA.wasReleased()) {
+      pressed = false;
+      pressedAt = 0;
+    }
+    if (M5Dial.BtnA.wasHold()) {
+      M5Dial.Speaker.tone(2600, 80);
+      return true;
+    }
+    if (pressed && pressedAt != 0 && millis() - pressedAt >= holdThresholdMs) {
+      M5Dial.Speaker.tone(2600, 80);
+      return true;
+    }
+    delay(20);
+  }
+  return false;
 }
 
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
@@ -1498,6 +1542,18 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
+    if (shouldResetWifiOnBootHold()) {
+      DBG_LOGLN("Boot button hold detected: resetting WiFi settings");
+      gWifi.resetSettings();
+      logRuntimeEvent("WiFi settings reset (boot hold)");
+      M5Dial.Display.fillScreen(BLACK);
+      M5Dial.Display.setTextColor(RED, BLACK);
+      M5Dial.Display.setTextDatum(top_left);
+      M5Dial.Display.setFont(&fonts::Font2);
+      M5Dial.Display.drawString("WiFi reset complete", 8, 92);
+      M5Dial.Display.drawString("Opening portal...", 8, 116);
+      delay(600);
+    }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
@@ -1521,7 +1577,7 @@ void setup() {
     gRt.mqttConnected = false;
   }
 
-  showBootInfoScreen(5000);
+  showBootInfoScreen();
   gDisplay.begin();
   gDisplay.invalidateAll();
   logRuntimeEvent("System booted");
