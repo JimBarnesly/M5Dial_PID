@@ -478,6 +478,25 @@ static void showBootInfoScreen(uint32_t durationMs = 30000) {
   }
 }
 
+static bool shouldResetWifiOnBootHold(uint32_t promptWindowMs = 3000) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(BLACK);
+  d.setTextColor(ORANGE, BLACK);
+  d.setTextDatum(top_left);
+  d.setFont(&fonts::Font2);
+  d.drawString("Hold button to reset WiFi", 8, 88);
+  d.setTextColor(WHITE, BLACK);
+  d.drawString("Waiting 3s...", 8, 112);
+
+  const uint32_t started = millis();
+  while (millis() - started < promptWindowMs) {
+    M5Dial.update();
+    if (M5Dial.BtnA.wasHold()) return true;
+    delay(20);
+  }
+  return false;
+}
+
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
   JsonObjectConst profileObj = doc["profile"].as<JsonObjectConst>();
   if (profileObj.isNull()) return false;
@@ -1500,6 +1519,11 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
+    if (shouldResetWifiOnBootHold()) {
+      DBG_LOGLN("Boot button hold detected: resetting WiFi settings");
+      gWifi.resetSettings();
+      logRuntimeEvent("WiFi settings reset (boot hold)");
+    }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
@@ -1523,7 +1547,7 @@ void setup() {
     gRt.mqttConnected = false;
   }
 
-  showBootInfoScreen(5000);
+  showBootInfoScreen();
   gDisplay.begin();
   gDisplay.invalidateAll();
   logRuntimeEvent("System booted");
