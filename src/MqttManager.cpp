@@ -46,6 +46,10 @@ void MqttManager::setCommandCallback(CommandCallback cb) {
   _commandCallback = cb;
 }
 
+const char* MqttManager::clientId() const {
+  return _clientId;
+}
+
 void MqttManager::update() {
   if (!_cfg || !_rt) return;
 
