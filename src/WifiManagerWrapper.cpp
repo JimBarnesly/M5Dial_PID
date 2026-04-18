@@ -92,5 +92,9 @@ const char* WifiManagerWrapper::getPortalApPassword() const {
 
 void WifiManagerWrapper::resetSettings() {
   _wm.resetSettings();
-  WiFi.disconnect(false, true);
+  WiFi.disconnect(true, true);
+  delay(120);
+  WiFi.mode(WIFI_OFF);
+  delay(120);
+  WiFi.mode(WIFI_STA);
 }

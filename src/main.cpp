@@ -478,7 +478,7 @@ static void showBootInfoScreen(uint32_t durationMs = 30000) {
   }
 }
 
-static bool shouldResetWifiOnBootHold(uint32_t promptWindowMs = 3000) {
+static bool shouldResetWifiOnBootHold(uint32_t promptWindowMs = 4000, uint32_t holdThresholdMs = 1200) {
   auto& d = M5Dial.Display;
   d.fillScreen(BLACK);
   d.setTextColor(ORANGE, BLACK);
@@ -486,12 +486,30 @@ static bool shouldResetWifiOnBootHold(uint32_t promptWindowMs = 3000) {
   d.setFont(&fonts::Font2);
   d.drawString("Hold button to reset WiFi", 8, 88);
   d.setTextColor(WHITE, BLACK);
-  d.drawString("Waiting 3s...", 8, 112);
+  d.drawString("Hold >=1.2s (window 4s)", 8, 112);
+  d.drawString("Release after beep", 8, 136);
 
   const uint32_t started = millis();
+  uint32_t pressedAt = 0;
+  bool pressed = false;
   while (millis() - started < promptWindowMs) {
     M5Dial.update();
-    if (M5Dial.BtnA.wasHold()) return true;
+    if (M5Dial.BtnA.wasPressed()) {
+      pressed = true;
+      pressedAt = millis();
+    }
+    if (M5Dial.BtnA.wasReleased()) {
+      pressed = false;
+      pressedAt = 0;
+    }
+    if (M5Dial.BtnA.wasHold()) {
+      M5Dial.Speaker.tone(2600, 80);
+      return true;
+    }
+    if (pressed && pressedAt != 0 && millis() - pressedAt >= holdThresholdMs) {
+      M5Dial.Speaker.tone(2600, 80);
+      return true;
+    }
     delay(20);
   }
   return false;
@@ -1523,6 +1541,13 @@ void setup() {
       DBG_LOGLN("Boot button hold detected: resetting WiFi settings");
       gWifi.resetSettings();
       logRuntimeEvent("WiFi settings reset (boot hold)");
+      M5Dial.Display.fillScreen(BLACK);
+      M5Dial.Display.setTextColor(RED, BLACK);
+      M5Dial.Display.setTextDatum(top_left);
+      M5Dial.Display.setFont(&fonts::Font2);
+      M5Dial.Display.drawString("WiFi reset complete", 8, 92);
+      M5Dial.Display.drawString("Opening portal...", 8, 116);
+      delay(600);
     }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     debugPrintBootNetworkTargets();
