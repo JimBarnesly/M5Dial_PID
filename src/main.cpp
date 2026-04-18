@@ -447,6 +447,9 @@ static void showBootInfoScreen(uint32_t durationMs = 30000) {
   IPAddress mqttIp;
   const bool mqttResolved = (gCfg.mqttHost[0] != '\0') && WiFi.hostByName(gCfg.mqttHost, mqttIp);
   const String mqttIpText = mqttResolved ? mqttIp.toString() : String("<unresolved>");
+  const String mqttTopicBase = CoreConfig::mqttTopicBase();
+  const String mqttCommandTopic = mqttTopicBase + "/command";
+  const String mqttStateTopic = mqttTopicBase + "/state";
 
   auto& d = M5Dial.Display;
   d.fillScreen(BLACK);
@@ -466,9 +469,11 @@ static void showBootInfoScreen(uint32_t durationMs = 30000) {
   d.drawString(String("MQTT IP: ") + mqttIpText, 8, 110);
   d.drawString(String("Port/TLS: ") + String(gCfg.mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 134);
   d.drawString(String("Client ID: ") + gMqtt.clientId(), 8, 158);
+  d.drawString(String("Pub: ") + mqttCommandTopic, 8, 182);
+  d.drawString(String("Sub: ") + mqttStateTopic, 8, 206);
 
   d.setTextColor(0xBDF7, BLACK);
-  d.drawString("Press button to continue...", 8, 182);
+  d.drawString("Press button to continue...", 8, 228);
 
   const uint32_t started = millis();
   while (millis() - started < durationMs) {
