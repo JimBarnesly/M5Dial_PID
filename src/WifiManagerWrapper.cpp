@@ -33,7 +33,8 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
-  WiFi.persistent(false);
+  // Keep STA credentials across power cycles.
+  WiFi.persistent(true);
   _wm.setDebugOutput(true);
   _wm.setConnectRetries(8);
   _wm.setConfigPortalBlocking(false);
@@ -91,5 +92,9 @@ const char* WifiManagerWrapper::getPortalApPassword() const {
 
 void WifiManagerWrapper::resetSettings() {
   _wm.resetSettings();
-  WiFi.disconnect(false, true);
+  WiFi.disconnect(true, true);
+  delay(120);
+  WiFi.mode(WIFI_OFF);
+  delay(120);
+  WiFi.mode(WIFI_STA);
 }
