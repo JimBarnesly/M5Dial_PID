@@ -440,7 +440,7 @@ static void debugPrintBootNetworkTargets() {
   }
 }
 
-static void showBootInfoScreen(uint32_t durationMs = 5000) {
+static void showBootInfoScreen(uint32_t durationMs = 30000) {
   String ssid = WiFi.SSID();
   if (ssid.length() == 0) ssid = "<not-associated>";
 
@@ -465,13 +465,15 @@ static void showBootInfoScreen(uint32_t durationMs = 5000) {
   d.drawString(String("MQTT Host: ") + gCfg.mqttHost, 8, 86);
   d.drawString(String("MQTT IP: ") + mqttIpText, 8, 110);
   d.drawString(String("Port/TLS: ") + String(gCfg.mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 134);
+  d.drawString(String("Client ID: ") + gMqtt.clientId(), 8, 158);
 
   d.setTextColor(0xBDF7, BLACK);
-  d.drawString("Starting main screen...", 8, 168);
+  d.drawString("Press button to continue...", 8, 182);
 
   const uint32_t started = millis();
   while (millis() - started < durationMs) {
     M5Dial.update();
+    if (M5Dial.BtnA.wasClicked()) break;
     delay(20);
   }
 }

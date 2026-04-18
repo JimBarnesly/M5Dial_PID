@@ -23,6 +23,7 @@ public:
   void publishConfig(const PersistentConfig& cfg, const RuntimeState& rt);
   void publishEventLog(const RuntimeState& rt);
   bool isConnected();
+  const char* clientId() const;
 
   using CommandCallback = std::function<void(const char* topic, const char* payload)>;
   void setCommandCallback(CommandCallback cb);
