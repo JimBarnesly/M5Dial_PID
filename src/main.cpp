@@ -440,7 +440,7 @@ static void debugPrintBootNetworkTargets() {
   }
 }
 
-static void showBootInfoScreen(uint32_t durationMs = 5000) {
+static void showBootInfoScreen(uint32_t durationMs = 30000) {
   String ssid = WiFi.SSID();
   if (ssid.length() == 0) ssid = "<not-associated>";
 
@@ -465,15 +465,36 @@ static void showBootInfoScreen(uint32_t durationMs = 5000) {
   d.drawString(String("MQTT Host: ") + gCfg.mqttHost, 8, 86);
   d.drawString(String("MQTT IP: ") + mqttIpText, 8, 110);
   d.drawString(String("Port/TLS: ") + String(gCfg.mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 134);
+  d.drawString(String("Client ID: ") + gMqtt.clientId(), 8, 158);
 
   d.setTextColor(0xBDF7, BLACK);
-  d.drawString("Starting main screen...", 8, 168);
+  d.drawString("Press button to continue...", 8, 182);
 
   const uint32_t started = millis();
   while (millis() - started < durationMs) {
     M5Dial.update();
+    if (M5Dial.BtnA.wasClicked()) break;
     delay(20);
   }
+}
+
+static bool shouldResetWifiOnBootHold(uint32_t promptWindowMs = 3000) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(BLACK);
+  d.setTextColor(ORANGE, BLACK);
+  d.setTextDatum(top_left);
+  d.setFont(&fonts::Font2);
+  d.drawString("Hold button to reset WiFi", 8, 88);
+  d.setTextColor(WHITE, BLACK);
+  d.drawString("Waiting 3s...", 8, 112);
+
+  const uint32_t started = millis();
+  while (millis() - started < promptWindowMs) {
+    M5Dial.update();
+    if (M5Dial.BtnA.wasHold()) return true;
+    delay(20);
+  }
+  return false;
 }
 
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
@@ -1498,6 +1519,11 @@ void setup() {
   gStages.begin(&gCfg, &gRt);
 
   if (!debugWifiDisabledEffective()) {
+    if (shouldResetWifiOnBootHold()) {
+      DBG_LOGLN("Boot button hold detected: resetting WiFi settings");
+      gWifi.resetSettings();
+      logRuntimeEvent("WiFi settings reset (boot hold)");
+    }
     gWifi.begin(gCfg.wifiPortalTimeoutSec, gCfg.mqttHost, gCfg.mqttPort);
     debugPrintBootNetworkTargets();
     DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
@@ -1521,7 +1547,7 @@ void setup() {
     gRt.mqttConnected = false;
   }
 
-  showBootInfoScreen(5000);
+  showBootInfoScreen();
   gDisplay.begin();
   gDisplay.invalidateAll();
   logRuntimeEvent("System booted");
