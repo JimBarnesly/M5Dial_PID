@@ -1537,6 +1537,7 @@ void setup() {
   gHeater.begin();
   gBuzzer.begin();
   gAlarm.setSignalHandler([](bool on) { gBuzzer.set(on); });
+  gAlarm.setCompletionHandler([]() { gBuzzer.playCompletionPattern(); });
   gAlarm.begin();
   gAlarm.setLocalUiAlarmControlEnabled(true);
   gStages.begin(&gCfg, &gRt);
@@ -1648,6 +1649,8 @@ void loop() {
   } else {
     gCompletionHandled = false;
   }
+
+  gBuzzer.update();
 
   if (now - gLastStatusMs >= Config::STATUS_PUBLISH_MS) {
     gLastStatusMs = now;

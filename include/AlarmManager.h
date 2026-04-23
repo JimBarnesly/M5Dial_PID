@@ -13,6 +13,7 @@ public:
   AlarmManager() = default;
   void begin();
   void setSignalHandler(std::function<void(bool on)> handler);
+  void setCompletionHandler(std::function<void()> handler);
   void setAlarm(AlarmCode code, const char* text, bool beep = true);
   void clearAlarm(AlarmControlSource source = AlarmControlSource::System);
   bool acknowledge(AlarmControlSource source = AlarmControlSource::System);
@@ -27,9 +28,9 @@ private:
   void setSignal(bool on);
 
   std::function<void(bool on)> _signalHandler;
+  std::function<void()> _completionHandler;
   AlarmCode _alarm {AlarmCode::None};
   char _text[64] {"OK"};
-  uint32_t _notifyBeepUntilMs {0};
   uint32_t _lastToggleMs {0};
   bool _beepState {false};
   bool _acknowledged {false};

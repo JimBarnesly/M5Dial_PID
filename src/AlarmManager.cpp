@@ -9,6 +9,7 @@ void AlarmManager::begin() {
 }
 
 void AlarmManager::setSignalHandler(std::function<void(bool on)> handler) { _signalHandler = std::move(handler); }
+void AlarmManager::setCompletionHandler(std::function<void()> handler) { _completionHandler = std::move(handler); }
 
 void AlarmManager::setSignal(bool on) {
   if (_signalHandler) _signalHandler(on);
@@ -35,7 +36,6 @@ void AlarmManager::clearAlarm(AlarmControlSource source) {
   strncpy(_text, "OK", sizeof(_text) - 1);
   _text[sizeof(_text) - 1] = '\0';
   _acknowledged = false;
-  _notifyBeepUntilMs = 0;
   _lastToggleMs = 0;
   _beepState = false;
   setSignal(false);
@@ -44,7 +44,6 @@ void AlarmManager::clearAlarm(AlarmControlSource source) {
 bool AlarmManager::acknowledge(AlarmControlSource source) {
   if (source == AlarmControlSource::LocalUi && !_allowLocalUiAlarmControl) return false;
   _acknowledged = true;
-  _notifyBeepUntilMs = 0;
   _lastToggleMs = 0;
   _beepState = false;
   setSignal(false);
@@ -58,17 +57,14 @@ AlarmCode AlarmManager::getAlarm() const { return _alarm; }
 const char* AlarmManager::getText() const { return _text; }
 
 void AlarmManager::notifyStageComplete() {
-  _notifyBeepUntilMs = millis() + CoreConfig::HOLD_COMPLETE_BEEP_MS;
-  _lastToggleMs = 0;
-  _beepState = false;
+  if (_completionHandler) _completionHandler();
 }
 
 void AlarmManager::update() {
   const uint32_t now = millis();
   const bool alarmActive = (_alarm != AlarmCode::None) && !_acknowledged;
-  const bool notifyActive = now < _notifyBeepUntilMs;
 
-  if (alarmActive || notifyActive) {
+  if (alarmActive) {
     if (_lastToggleMs == 0) {
       _lastToggleMs = now;
       _beepState = true;
