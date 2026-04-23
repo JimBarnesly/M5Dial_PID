@@ -16,6 +16,10 @@ private:
   void buildPortalCredentials();
   WiFiManager _wm;
   bool _started {false};
+  bool _portalForced {false};
+  bool _disableForcedCredentials {false};
+  uint8_t _authExpireCount {0};
+  uint32_t _lastAuthExpireMs {0};
   uint32_t _lastReconnectAttemptMs {0};
   char _apName[32] {};
   char _apPass[20] {};

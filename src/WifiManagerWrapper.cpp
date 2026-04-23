@@ -1,6 +1,7 @@
 #include "WifiManagerWrapper.h"
 #include "core/CoreConfig.h"
 #include <WiFi.h>
+#include <esp_wifi_types.h>
 
 namespace {
 #if defined(DEV_FORCE_WIFI_CREDENTIALS)
@@ -39,8 +40,28 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   _wm.setConnectRetries(8);
   _wm.setConfigPortalBlocking(false);
   _wm.setConfigPortalTimeout(portalTimeoutSec);
+  _portalForced = false;
+  _disableForcedCredentials = false;
+  _authExpireCount = 0;
+  _lastAuthExpireMs = 0;
 
-  if (kUseForcedCredentials) {
+  WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event != ARDUINO_EVENT_WIFI_STA_DISCONNECTED) return;
+    const uint8_t reason = info.wifi_sta_disconnected.reason;
+    if (reason != WIFI_REASON_AUTH_EXPIRE) return;
+
+    const uint32_t now = millis();
+    if (_lastAuthExpireMs == 0 || now - _lastAuthExpireMs > 15000) {
+      _authExpireCount = 1;
+    } else if (_authExpireCount < 255) {
+      ++_authExpireCount;
+    }
+    _lastAuthExpireMs = now;
+
+    if (_authExpireCount >= 3) _disableForcedCredentials = true;
+  });
+
+  if (kUseForcedCredentials && !_disableForcedCredentials) {
     Serial.printf("[WiFi] attempting forced credentials SSID=%s\n", kForcedSsid);
     WiFi.disconnect(false, false);
     delay(100);
@@ -66,7 +87,17 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
 void WifiManagerWrapper::update() {
   if (_started) {
     _wm.process();
+    if (_authExpireCount >= 6 && !_portalForced) {
+      Serial.println("[WiFi] repeated AUTH_EXPIRE; clearing WiFi settings and starting portal");
+      resetSettings();
+      _wm.startConfigPortal(_apName, _apPass);
+      _portalForced = true;
+      _authExpireCount = 0;
+      return;
+    }
+
     if (kUseForcedCredentials &&
+        !_disableForcedCredentials &&
         WiFi.status() != WL_CONNECTED &&
         millis() - _lastReconnectAttemptMs > 10000) {
       _lastReconnectAttemptMs = millis();

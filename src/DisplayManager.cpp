@@ -52,6 +52,25 @@ constexpr uint16_t RING_DIM = 0x18C3;
 static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
 }
+
+void fillInnerRectClipped(lgfx::LGFX_Device& d, int x, int y, int w, int h, uint16_t color) {
+  constexpr int kSafeRadius = kRingInner - 2;
+  const int radiusSq = kSafeRadius * kSafeRadius;
+  const int rectTop = max(0, y);
+  const int rectBottom = min(239, y + h - 1);
+
+  for (int py = rectTop; py <= rectBottom; ++py) {
+    const int dy = py - kCy;
+    const int dySq = dy * dy;
+    if (dySq > radiusSq) continue;
+
+    const int maxDx = static_cast<int>(sqrtf(static_cast<float>(radiusSq - dySq)));
+    const int clipLeft = max(x, kCx - maxDx);
+    const int clipRight = min(x + w - 1, kCx + maxDx);
+    if (clipLeft > clipRight) continue;
+    d.fillRect(clipLeft, py, clipRight - clipLeft + 1, 1, color);
+  }
+}
 }
 
 void DisplayManager::begin() {
@@ -282,7 +301,7 @@ void DisplayManager::drawCenterTemp(const RuntimeState& rt, uint32_t now, bool f
 
   const bool fullRedraw = force || _lastTempText[0] == '\0' || oldWidth != newWidth || lenOld != lenNew;
   if (fullRedraw) {
-    d.fillRect(kTempBoxX, kTempBoxY, kTempBoxW, kTempBoxH, BG);
+    fillInnerRectClipped(d, kTempBoxX, kTempBoxY, kTempBoxW, kTempBoxH, BG);
 
     d.setTextDatum(middle_center);
     d.setTextColor(rgb(90, 70, 28), BG);
@@ -290,9 +309,10 @@ void DisplayManager::drawCenterTemp(const RuntimeState& rt, uint32_t now, bool f
     d.setTextColor(FG, BG);
     d.drawString(tempBuf, 114, 102);
 
-    d.setFont(&fonts::Font4);
+    d.setFont(&fonts::Font2);
     d.setTextColor(GOLD, BG);
-    d.drawString("C", 180, 86);
+    d.setTextDatum(top_left);
+    d.drawString("C", 176, 82);
   } else {
     const int startX = 114 - (newWidth / 2);
     const int fontHeight = d.fontHeight();
@@ -370,7 +390,7 @@ void DisplayManager::drawInfoRow(const RuntimeState& rt, uint32_t remainingSec, 
   if (!force && strcmp(_lastInfoText, infoBuf) == 0 && _lastUiMode == rt.uiMode) return;
 
   auto& d = M5Dial.Display;
-  d.fillRect(kInfoRowX, kInfoRowY, kInfoRowW, kInfoRowH, BG);
+  fillInnerRectClipped(d, kInfoRowX, kInfoRowY, kInfoRowW, kInfoRowH, BG);
   d.setTextDatum(top_center);
   d.setFont(&fonts::Font4);
   d.setTextColor(FG, BG);
@@ -385,7 +405,7 @@ void DisplayManager::drawHeatIcon(const RuntimeState& rt, bool force) {
   if (!force && _lastHeatOn == on) return;
 
   auto& d = M5Dial.Display;
-  d.fillRect(184, 84, 28, 36, BG);
+  fillInnerRectClipped(d, 184, 84, 28, 36, BG);
   drawFireGlyph(198, kIconCenterY, on ? RED : OUTLINE_SOFT);
 
   _lastHeatOn = on;
@@ -395,7 +415,7 @@ void DisplayManager::drawWifiIcon(const RuntimeState& rt, bool force) {
   if (!force && _lastWifiConnected == rt.wifiConnected && _lastMqttConnected == rt.mqttConnected) return;
 
   auto& d = M5Dial.Display;
-  d.fillRect(28, 84, 28, 28, BG);
+  fillInnerRectClipped(d, 28, 84, 28, 28, BG);
 
   uint16_t color = OUTLINE_SOFT;
   if (rt.wifiConnected && rt.mqttConnected) color = BLUE;
