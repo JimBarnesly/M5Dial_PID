@@ -3,9 +3,8 @@
 
 class WifiManagerWrapper {
 public:
-  void begin(uint16_t portalTimeoutSec = 180,
-             const char* defaultMqttHost = "",
-             uint16_t defaultMqttPort = 1883);
+  void beginStandalone(uint16_t portalTimeoutSec = 180);
+  void beginIntegrated(const char* ssid, const char* password);
   void update();
   bool isConnected() const;
   const char* getPortalApName() const;
@@ -21,6 +20,9 @@ private:
   uint8_t _authExpireCount {0};
   uint32_t _lastAuthExpireMs {0};
   uint32_t _lastReconnectAttemptMs {0};
+  bool _integratedMode {false};
   char _apName[32] {};
   char _apPass[20] {};
+  char _managedSsid[33] {};
+  char _managedPass[65] {};
 };

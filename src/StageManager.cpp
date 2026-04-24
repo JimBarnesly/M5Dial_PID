@@ -13,11 +13,6 @@ void StageManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
 void StageManager::start() {
   if (!_cfg || !_rt) return;
 
-  if (_cfg->profileCount > 0) {
-    startProfile(_cfg->activeProfileIndex);
-    return;
-  }
-
   DBG_LOGF("StageManager: start manual target=%.2f holdMin=%lu\n",
            _cfg->localSetpointC,
            static_cast<unsigned long>(_cfg->manualStageMinutes));
@@ -118,22 +113,28 @@ const ProcessStage* StageManager::getCurrentStage() const {
     return &profile->stages[_rt->currentStageIndex];
   }
 
-  switch (_rt->uiMode) {
-    case UiMode::SetpointAdjust:
-      strlcpy(_manualStage.name, "SET TEMP", sizeof(_manualStage.name));
-      break;
-    case UiMode::StageTimeAdjust:
-      strlcpy(_manualStage.name, "SET TIME", sizeof(_manualStage.name));
-      break;
-    case UiMode::Running:
-      strlcpy(_manualStage.name, "RUNNING", sizeof(_manualStage.name));
-      break;
-    case UiMode::Paused:
-      strlcpy(_manualStage.name, "PAUSED", sizeof(_manualStage.name));
-      break;
-    case UiMode::SettingsAdjust:
-      strlcpy(_manualStage.name, "SETTINGS", sizeof(_manualStage.name));
-      break;
+  if (_rt->runState == RunState::Running) {
+    strlcpy(_manualStage.name, "RUNNING", sizeof(_manualStage.name));
+  } else if (_rt->runState == RunState::Paused) {
+    strlcpy(_manualStage.name, "PAUSED", sizeof(_manualStage.name));
+  } else {
+    switch (_rt->uiMode) {
+      case UiMode::SetpointAdjust:
+        strlcpy(_manualStage.name, "SET TEMP", sizeof(_manualStage.name));
+        break;
+      case UiMode::StageTimeAdjust:
+        strlcpy(_manualStage.name, "SET TIME", sizeof(_manualStage.name));
+        break;
+      case UiMode::Running:
+        strlcpy(_manualStage.name, "RUNNING", sizeof(_manualStage.name));
+        break;
+      case UiMode::Paused:
+        strlcpy(_manualStage.name, "PAUSED", sizeof(_manualStage.name));
+        break;
+      case UiMode::SettingsAdjust:
+        strlcpy(_manualStage.name, "SETTINGS", sizeof(_manualStage.name));
+        break;
+    }
   }
   _manualStage.targetC = _rt->currentSetpointC;
   _manualStage.holdSeconds = _rt->activeStageMinutes * 60UL;

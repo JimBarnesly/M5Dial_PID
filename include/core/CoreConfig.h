@@ -5,10 +5,15 @@
 namespace CoreConfig {
 constexpr bool HEATER_ACTIVE_HIGH = true;
 constexpr float DEFAULT_SETPOINT_C = 65.0f;
+constexpr float DEFAULT_MIN_SETPOINT_C = 20.0f;
+constexpr float DEFAULT_MAX_SETPOINT_C = 99.0f;
 constexpr float DEFAULT_STAGE_START_BAND_C = 2.0f;
 constexpr uint32_t DEFAULT_STAGE_MINUTES = 60;
 constexpr float STAGE_AT_TEMP_BAND_C = 0.3f;
 constexpr float DEFAULT_OVER_TEMP_C = 99.0f;
+constexpr float DEFAULT_LOW_ALARM_C = 18.0f;
+constexpr float DEFAULT_HIGH_ALARM_C = 85.0f;
+constexpr float DEFAULT_ALARM_HYSTERESIS_C = 1.0f;
 constexpr float SENSOR_FAULT_LOW_C = -10.0f;
 constexpr float SENSOR_FAULT_HIGH_C = 150.0f;
 constexpr float DEFAULT_TEMP_SMOOTHING_ALPHA = 0.25f;
@@ -19,6 +24,9 @@ constexpr float PID_KI = 0.08f;
 constexpr float PID_KD = 20.0f;
 constexpr uint32_t TEMP_SAMPLE_MS = 1000;
 constexpr uint32_t MQTT_RECONNECT_MS = 5000;
+constexpr uint32_t CONTROLLER_ENROLL_RETRY_MS = 5000;
+constexpr uint32_t CONTROLLER_SUPERVISION_TIMEOUT_MS = 20000;
+constexpr uint32_t PAIRING_WINDOW_MS = 60000;
 constexpr uint32_t DEFAULT_MQTT_COMMS_TIMEOUT_SEC = 30;
 constexpr uint16_t DEFAULT_WIFI_PORTAL_TIMEOUT_SEC = 180;
 constexpr uint32_t STATUS_PUBLISH_MS = 2000;
@@ -43,11 +51,8 @@ constexpr char WIFI_AP_NAME_PREFIX[] = "EnvCtrl-";
 constexpr char WIFI_AP_PASS_PREFIX[] = "BC";
 constexpr char FIRMWARE_VERSION[] = "v0.9.0-dev";
 constexpr char MQTT_CLIENT_ID[] = "env_controller";
-constexpr char MQTT_DEVICE_HOSTNAME[] = "HLT_PID";
-
-inline String mqttTopicBase() {
-  return String("/") + MQTT_DEVICE_HOSTNAME;
-}
+constexpr char MQTT_DEFAULT_SYSTEM_ID[] = "unbound";
+constexpr char MQTT_DEVICE_CLASS[] = "pid";
 constexpr uint16_t MQTT_PORT_PLAIN = 1883;
 constexpr uint16_t MQTT_PORT_TLS = 8883;
 constexpr uint32_t UI_TEMP_MS = 1000;

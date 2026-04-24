@@ -12,6 +12,10 @@ void PidController::setTunings(float kp, float ki, float kd) {
   _kd = max(0.0f, kd);
 }
 
+void PidController::setReverseActing(bool reverseActing) {
+  _reverseActing = reverseActing;
+}
+
 void PidController::reset() {
   _integral = 0.0f;
   _lastInput = 0.0f;
@@ -21,14 +25,15 @@ void PidController::reset() {
 float PidController::compute(float setpoint, float input, float dtSeconds) {
   if (dtSeconds <= 0.0f) return 0.0f;
 
-  const float error = setpoint - input;
+  const float direction = _reverseActing ? -1.0f : 1.0f;
+  const float error = (setpoint - input) * direction;
 
   _integral += error * dtSeconds;
   _integral = constrain(_integral, -100.0f / max(_ki, 0.001f), 100.0f / max(_ki, 0.001f));
 
   float derivative = 0.0f;
   if (_hasLast) {
-    derivative = -(input - _lastInput) / dtSeconds;  // derivative on measurement
+    derivative = -direction * (input - _lastInput) / dtSeconds;  // derivative on measurement
   }
 
   float output = _kp * error + _ki * _integral + _kd * derivative;

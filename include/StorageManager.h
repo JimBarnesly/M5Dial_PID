@@ -8,6 +8,9 @@ public:
   void begin();
   bool load(PersistentConfig& cfg);
   void save(const PersistentConfig& cfg);
+  void loadIntegrationBinding(IntegrationBinding& binding);
+  void saveIntegrationBinding(const IntegrationBinding& binding);
+  void clearIntegrationBinding();
 
 private:
   Preferences _prefs;

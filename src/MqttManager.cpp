@@ -7,8 +7,16 @@
 
 MqttManager::MqttManager() : _client(_wifiClient) {}
 namespace {
-constexpr char kMqttCommandTopic[] = "/command";
-constexpr char kMqttStateTopic[] = "/state";
+constexpr char kMqttCommandTopic[] = "/cmd";
+constexpr char kMqttStatusTopic[] = "/status";
+constexpr char kMqttShadowTopic[] = "/shadow";
+constexpr char kMqttConfigTopic[] = "/config";
+constexpr char kMqttEventsTopic[] = "/events";
+constexpr char kMqttCalibrationTopic[] = "/calibration";
+constexpr char kMqttLifecycleTopic[] = "/lifecycle";
+constexpr char kMqttEnrollmentRequestTopic[] = "/enrollment/request";
+constexpr char kMqttEnrollmentResponseTopic[] = "/enrollment/response";
+constexpr char kMqttControllerHeartbeatTopic[] = "/controller/heartbeat";
 
 const char* runStateText(RunState runState) {
   switch (runState) {
@@ -30,13 +38,18 @@ void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _transportClient = &_wifiClient;
   _client.setBufferSize(1024);
   configureClientForSecurity(true);
-  _client.setServer(cfg->mqttHost, effectivePort());
+  _client.setServer(_brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : cfg->mqttHost, effectivePort());
   _client.setCallback([this](char* topic, byte* payload, unsigned int length) {
     this->handleMessage(topic, payload, length);
   });
 }
 
 void MqttManager::buildClientId() {
+  if (_cfg && _cfg->deviceId[0] != '\0') {
+    snprintf(_clientId, sizeof(_clientId), "%s_%s", CoreConfig::MQTT_CLIENT_ID, _cfg->deviceId);
+    return;
+  }
+
   const uint64_t efuseMac = ESP.getEfuseMac();
   const uint32_t suffix = static_cast<uint32_t>(efuseMac & 0xFFFFFFULL);
   snprintf(_clientId, sizeof(_clientId), "%s_%06lX", CoreConfig::MQTT_CLIENT_ID, static_cast<unsigned long>(suffix));
@@ -50,11 +63,18 @@ const char* MqttManager::clientId() const {
   return _clientId;
 }
 
+String MqttManager::topicBase() const {
+  if (!_cfg) return String("/systems/") + CoreConfig::MQTT_DEFAULT_SYSTEM_ID + "/devices/" +
+                           CoreConfig::MQTT_DEVICE_CLASS + "/unknown";
+  const char* systemId = (_rt && _rt->systemId[0] != '\0') ? _rt->systemId : _cfg->systemId;
+  return String("/systems/") + systemId + "/devices/" + CoreConfig::MQTT_DEVICE_CLASS + "/" + _cfg->deviceId;
+}
+
 void MqttManager::update() {
   if (!_cfg || !_rt) return;
 
   configureClientForSecurity();
-  _client.setServer(_cfg->mqttHost, effectivePort());
+  _client.setServer(_brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost, effectivePort());
 
   if (!_rt->wifiConnected) {
     _rt->mqttConnected = false;
@@ -85,21 +105,23 @@ void MqttManager::tryReconnect() {
   }
 
   if (ok) {
-    DBG_LOGF("MQTT connected (%s:%u tls=%d)\n", _cfg->mqttHost, effectivePort(), _cfg->mqttUseTls);
-    Serial.printf("[MQTT] connected host=%s port=%u tls=%d\n", _cfg->mqttHost, effectivePort(), _cfg->mqttUseTls);
+    const char* host = _brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost;
+    DBG_LOGF("MQTT connected (%s:%u tls=%d)\n", host, effectivePort(), _cfg->mqttUseTls);
+    Serial.printf("[MQTT] connected host=%s port=%u tls=%d\n", host, effectivePort(), _cfg->mqttUseTls);
     subscribeTopics();
     _rt->lastValidMqttConnectionAtMs = millis();
   } else {
+    const char* host = _brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost;
     DBG_LOGF("MQTT reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
              _client.state(),
-             _cfg->mqttHost,
+             host,
              effectivePort(),
              _cfg->mqttUseTls,
              _rt ? _rt->wifiConnected : false,
              strlen(_cfg->mqttUser) > 0);
     Serial.printf("[MQTT] reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
                   _client.state(),
-                  _cfg->mqttHost,
+                  host,
                   effectivePort(),
                   _cfg->mqttUseTls,
                   _rt ? _rt->wifiConnected : false,
@@ -108,12 +130,18 @@ void MqttManager::tryReconnect() {
 }
 
 void MqttManager::subscribeTopics() {
-  String commandTopic = CoreConfig::mqttTopicBase() + kMqttCommandTopic;
+  String commandTopic = topicFor(kMqttCommandTopic);
   _client.subscribe(commandTopic.c_str());
 
   // Backward compatibility: continue accepting direct per-command topics.
-  String legacyTopic = CoreConfig::mqttTopicBase() + "/cmd/+";
+  String legacyTopic = topicFor("/cmd/+");
   _client.subscribe(legacyTopic.c_str());
+  _client.subscribe(topicFor(kMqttEnrollmentResponseTopic).c_str());
+  _client.subscribe(topicFor(kMqttControllerHeartbeatTopic).c_str());
+}
+
+String MqttManager::topicFor(const char* leaf) const {
+  return topicBase() + (leaf ? leaf : "");
 }
 
 void MqttManager::handleMessage(char* topic, byte* payload, unsigned int length) {
@@ -130,6 +158,28 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   JsonDocument doc;
   doc["tempC"] = rt.currentTempC;
   doc["rawTempC"] = rt.currentRawTempC;
+  doc["sensor_mode"] = rt.sensorMode;
+  doc["probe_count"] = rt.probeCount;
+  doc["probe_a_temp"] = rt.probeATempC;
+  if (rt.probeCount >= 2 && !isnan(rt.probeBTempC)) doc["probe_b_temp"] = rt.probeBTempC;
+  else doc["probe_b_temp"] = nullptr;
+  doc["probe_a_ok"] = rt.probeAHealthy;
+  doc["probe_b_ok"] = rt.probeBHealthy;
+  doc["feed_forward_enabled"] = rt.feedForwardEnabled;
+  doc["operating_mode"] = (rt.operatingMode == OperatingMode::Integrated) ? "integrated" : "standalone";
+  doc["integration_state"] = static_cast<uint8_t>(rt.integrationState);
+  doc["paired_metadata_present"] = rt.pairedMetadataPresent;
+  doc["controller_enrollment_pending"] = rt.controllerEnrollmentPending;
+  doc["controller_connected"] = rt.controllerConnected;
+  doc["integrated_fallback_active"] = rt.integratedFallbackActive;
+  doc["control_authority"] =
+      (rt.controlAuthority == ControlAuthority::Controller) ? "controller"
+      : (rt.controlAuthority == ControlAuthority::LocalOverride) ? "local_override"
+      : "local";
+  doc["control_enabled"] = rt.controlEnabled;
+  doc["system_id"] = rt.systemId;
+  doc["system_name"] = rt.systemName;
+  doc["controller_id"] = rt.controllerId;
   doc["setpointC"] = rt.currentSetpointC;
   doc["heaterOutputPct"] = rt.heaterOutputPct;
   doc["heaterEnabled"] = rt.heatingEnabled;
@@ -148,6 +198,8 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["prevPidKd"] = rt.previousKd;
   doc["sensorHealthy"] = rt.sensorHealthy;
   doc["tempPlausible"] = rt.tempPlausible;
+  doc["low_temp_alarm_active"] = rt.lowTempAlarmActive;
+  doc["high_temp_alarm_active"] = rt.highTempAlarmActive;
   doc["wifiConnected"] = rt.wifiConnected;
   doc["mqttConnected"] = rt.mqttConnected;
   doc["debugEnabled"] = gDebugEnabled;
@@ -165,7 +217,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   String out;
   serializeJson(doc, out);
 
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttStatusTopic);
   _client.publish(topic.c_str(), out.c_str(), true);
   publishShadow(rt, remainingSec);
 }
@@ -189,7 +241,7 @@ void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
   String out;
   serializeJson(doc, out);
 
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttShadowTopic);
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -218,7 +270,7 @@ void MqttManager::publishCommandAck(const char* cmdId,
   String out;
   serializeJson(doc, out);
 
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttConfigTopic);
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -230,6 +282,14 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   doc["tempSmoothingAlpha"] = cfg.tempSmoothingAlpha;
   doc["tempC"] = rt.currentTempC;
   doc["rawTempC"] = rt.currentRawTempC;
+  doc["sensor_mode"] = rt.sensorMode;
+  doc["probe_count"] = rt.probeCount;
+  doc["probe_a_temp"] = rt.probeATempC;
+  if (rt.probeCount >= 2 && !isnan(rt.probeBTempC)) doc["probe_b_temp"] = rt.probeBTempC;
+  else doc["probe_b_temp"] = nullptr;
+  doc["probe_a_ok"] = rt.probeAHealthy;
+  doc["probe_b_ok"] = rt.probeBHealthy;
+  doc["feed_forward_enabled"] = rt.feedForwardEnabled;
   doc["sensorHealthy"] = rt.sensorHealthy;
   doc["tempPlausible"] = rt.tempPlausible;
   doc["_type"] = "calibration_status";
@@ -237,7 +297,7 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   String out;
   serializeJson(doc, out);
 
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttCalibrationTopic);
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -248,7 +308,7 @@ void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   doc["value"] = true;
   String out;
   serializeJson(doc, out);
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttLifecycleTopic);
   _client.publish(topic.c_str(), out.c_str(), true);
   rt.pendingProfileCompletePublish = false;
 }
@@ -258,9 +318,32 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
 
   JsonDocument doc;
   doc["controlLock"] = static_cast<uint8_t>(cfg.controlLock);
+  doc["systemId"] = rt.systemId;
+  doc["deviceId"] = cfg.deviceId;
+  doc["deviceClass"] = CoreConfig::MQTT_DEVICE_CLASS;
+  doc["operatingMode"] = (rt.operatingMode == OperatingMode::Integrated) ? "integrated" : "standalone";
+  doc["integrationState"] = static_cast<uint8_t>(rt.integrationState);
+  doc["pairedMetadataPresent"] = rt.pairedMetadataPresent;
+  doc["controllerEnrollmentPending"] = rt.controllerEnrollmentPending;
+  doc["controllerConnected"] = rt.controllerConnected;
+  doc["integratedFallbackActive"] = rt.integratedFallbackActive;
+  doc["controlAuthority"] =
+      (rt.controlAuthority == ControlAuthority::Controller) ? "controller"
+      : (rt.controlAuthority == ControlAuthority::LocalOverride) ? "local_override"
+      : "local";
+  doc["controlEnabled"] = cfg.controlEnabled;
+  doc["localAuthorityOverride"] = cfg.localAuthorityOverride;
+  doc["systemName"] = rt.systemName;
+  doc["controllerId"] = rt.controllerId;
   doc["localSetpointC"] = cfg.localSetpointC;
+  doc["minSetpointC"] = cfg.minSetpointC;
+  doc["maxSetpointC"] = cfg.maxSetpointC;
   doc["manualStageMinutes"] = cfg.manualStageMinutes;
   doc["overTempC"] = cfg.overTempC;
+  doc["tempAlarmEnabled"] = cfg.tempAlarmEnabled;
+  doc["lowAlarmC"] = cfg.lowAlarmC;
+  doc["highAlarmC"] = cfg.highAlarmC;
+  doc["alarmHysteresisC"] = cfg.alarmHysteresisC;
   doc["mqttHost"] = cfg.mqttHost;
   doc["mqttPort"] = cfg.mqttPort;
   doc["mqttUseTls"] = cfg.mqttUseTls;
@@ -272,16 +355,20 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["pidKp"] = cfg.pidKp;
   doc["pidKi"] = cfg.pidKi;
   doc["pidKd"] = cfg.pidKd;
+  doc["pidDirection"] = static_cast<uint8_t>(cfg.pidDirection);
+  doc["maxOutputPercent"] = cfg.maxOutputPercent;
   doc["activePidKp"] = rt.currentKp;
   doc["activePidKi"] = rt.currentKi;
   doc["activePidKd"] = rt.currentKd;
   doc["autoTuneQualityScore"] = cfg.tuneQualityScore;
+  doc["displayBrightness"] = cfg.displayBrightness;
+  doc["buzzerEnabled"] = cfg.buzzerEnabled;
   doc["_type"] = "config_effective";
 
   String out;
   serializeJson(doc, out);
 
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttConfigTopic);
   _client.publish(topic.c_str(), out.c_str(), true);
 }
 
@@ -303,7 +390,7 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
 
   String out;
   serializeJson(doc, out);
-  String topic = CoreConfig::mqttTopicBase() + kMqttStateTopic;
+  String topic = topicFor(kMqttEventsTopic);
   _client.publish(topic.c_str(), out.c_str(), false);
 }
 
@@ -311,10 +398,27 @@ bool MqttManager::isConnected() {
   return _client.connected();
 }
 
+bool MqttManager::publishRaw(const char* leaf, const char* payload, bool retained) {
+  if (!_client.connected() || !payload) return false;
+  const String topic = topicFor(leaf);
+  return _client.publish(topic.c_str(), payload, retained);
+}
+
+void MqttManager::setBrokerOverride(const char* host, uint16_t port) {
+  strlcpy(_brokerOverrideHost, host ? host : "", sizeof(_brokerOverrideHost));
+  _brokerOverridePort = port;
+}
+
+void MqttManager::clearBrokerOverride() {
+  _brokerOverrideHost[0] = '\0';
+  _brokerOverridePort = 0;
+}
+
 uint16_t MqttManager::effectivePort() const {
   if (!_cfg) return CoreConfig::MQTT_PORT_PLAIN;
-  if (_cfg->mqttUseTls && _cfg->mqttPort == CoreConfig::MQTT_PORT_PLAIN) return CoreConfig::MQTT_PORT_TLS;
-  return _cfg->mqttPort;
+  uint16_t port = _brokerOverridePort != 0 ? _brokerOverridePort : _cfg->mqttPort;
+  if (_cfg->mqttUseTls && port == CoreConfig::MQTT_PORT_PLAIN) return CoreConfig::MQTT_PORT_TLS;
+  return port;
 }
 
 void MqttManager::configureClientForSecurity(bool force) {

@@ -193,7 +193,6 @@ void DisplayManager::drawStaticUi() {
   d.fillRect(kInfoRowX, kInfoRowY, kInfoRowW, kInfoRowH, BG);
 
   d.fillRect(kWifiHitX, kWifiHitY, kWifiHitW, kWifiHitH, BG);
-  drawSettingsIcon(42, kIconCenterY, OUTLINE_SOFT);
 
   _staticDrawn = true;
 }
@@ -251,9 +250,19 @@ void DisplayManager::drawRing(float progress, bool timerStarted, RunState runSta
 void DisplayManager::drawStagePill(const RuntimeState& rt, const ProcessStage* stage, bool force) {
   const char* text = nullptr;
   if (rt.activeAlarm != AlarmCode::None) text = rt.alarmText;
-  else if (rt.uiMode == UiMode::SetpointAdjust) text = "SET TEMP";
+  else if (rt.uiMode == UiMode::SettingsAdjust) {
+    switch (rt.settingsSection) {
+      case SettingsSection::Status: text = "STATUS"; break;
+      case SettingsSection::Control: text = "CONTROL"; break;
+      case SettingsSection::Pid: text = "PID SETTINGS"; break;
+      case SettingsSection::Network: text = "NETWORK"; break;
+      case SettingsSection::Integration: text = "INTEGRATION"; break;
+      case SettingsSection::Device: text = "DEVICE"; break;
+      case SettingsSection::Exit: text = "EXIT"; break;
+      default: text = "SETTINGS"; break;
+    }
+  } else if (rt.uiMode == UiMode::SetpointAdjust) text = "SET TEMP";
   else if (rt.uiMode == UiMode::StageTimeAdjust) text = "SET TIME";
-  else if (rt.uiMode == UiMode::SettingsAdjust) text = "SETTINGS";
   else if (rt.runState == RunState::Complete) text = "COMPLETE";
   else if (rt.runState == RunState::Paused) text = "PAUSED";
   else if (stage) text = stage->name;

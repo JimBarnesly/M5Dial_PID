@@ -22,8 +22,12 @@ public:
   void publishProfileCompleteIfPending(RuntimeState& rt);
   void publishConfig(const PersistentConfig& cfg, const RuntimeState& rt);
   void publishEventLog(const RuntimeState& rt);
+  bool publishRaw(const char* leaf, const char* payload, bool retained = false);
   bool isConnected();
   const char* clientId() const;
+  String topicBase() const;
+  void setBrokerOverride(const char* host, uint16_t port);
+  void clearBrokerOverride();
 
   using CommandCallback = std::function<void(const char* topic, const char* payload)>;
   void setCommandCallback(CommandCallback cb);
@@ -38,7 +42,9 @@ private:
   uint32_t _lastReconnectMs {0};
   bool _lastTlsEnabled {false};
   uint16_t _lastPort {0};
+  uint16_t _brokerOverridePort {0};
   char _clientId[40] {};
+  char _brokerOverrideHost[64] {};
   CommandCallback _commandCallback;
 
   void buildClientId();
@@ -47,5 +53,6 @@ private:
   void tryReconnect();
   void handleMessage(char* topic, byte* payload, unsigned int length);
   void subscribeTopics();
+  String topicFor(const char* leaf) const;
   void publishShadow(const RuntimeState& rt, uint32_t remainingSec);
 };

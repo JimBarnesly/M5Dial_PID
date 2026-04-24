@@ -14,6 +14,33 @@ enum class ControlMode : uint8_t {
   Remote
 };
 
+enum class ControlAuthority : uint8_t {
+  Local = 0,
+  Controller,
+  LocalOverride
+};
+
+enum class OperatingMode : uint8_t {
+  Standalone = 0,
+  Integrated
+};
+
+enum class IntegrationState : uint8_t {
+  None = 0,
+  BootstrapPending,
+  Enrolled
+};
+
+enum class DeviceType : uint8_t {
+  ThermalController = 0,
+  PumpController
+};
+
+enum class PidDirection : uint8_t {
+  Direct = 0,
+  Reverse
+};
+
 enum class MqttFallbackMode : uint8_t {
   HoldSetpoint = 0,
   Pause,
@@ -47,12 +74,30 @@ enum class UiMode : uint8_t {
   SettingsAdjust
 };
 
+enum class SettingsSection : uint8_t {
+  Status = 0,
+  Control,
+  Pid,
+  Network,
+  Integration,
+  Device,
+  Exit
+};
+
+enum class SettingsMenuLevel : uint8_t {
+  SectionList = 0,
+  ItemList,
+  EditValue
+};
+
 enum class AlarmCode : uint8_t {
   None = 0,
   SensorFault,
   OverTemp,
   HeatingIneffective,
-  MqttOffline
+  MqttOffline,
+  LowProcessTemp,
+  HighProcessTemp
 };
 
 struct ProcessStage {
@@ -72,12 +117,41 @@ struct RuntimeEvent {
   char text[48] {""};
 };
 
+struct IntegrationBinding {
+  uint16_t schemaVersion {1};
+  OperatingMode operatingMode {OperatingMode::Standalone};
+  IntegrationState integrationState {IntegrationState::None};
+  DeviceType deviceType {DeviceType::ThermalController};
+  bool paired {false};
+  char systemId[24] {"unbound"};
+  char systemName[32] {""};
+  char controllerId[24] {""};
+  char controllerPublicKey[192] {""};
+  char controllerFingerprint[96] {""};
+  char apSsid[32] {""};
+  char apPsk[64] {""};
+  char brokerHost[64] {""};
+  uint16_t brokerPort {0};
+  uint32_t issuedAt {0};
+  uint32_t epoch {0};
+};
+
 struct PersistentConfig {
+  char systemId[24] {"unbound"};
+  char deviceId[24] {""};
   ControlLock controlLock {ControlLock::LocalOrRemote};
+  bool controlEnabled {true};
+  bool localAuthorityOverride {false};
   float localSetpointC {CoreConfig::DEFAULT_SETPOINT_C};
   uint32_t manualStageMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};
+  float minSetpointC {CoreConfig::DEFAULT_MIN_SETPOINT_C};
+  float maxSetpointC {CoreConfig::DEFAULT_MAX_SETPOINT_C};
   float stageStartBandC {CoreConfig::DEFAULT_STAGE_START_BAND_C};
   float overTempC {CoreConfig::DEFAULT_OVER_TEMP_C};
+  bool tempAlarmEnabled {true};
+  float lowAlarmC {CoreConfig::DEFAULT_LOW_ALARM_C};
+  float highAlarmC {CoreConfig::DEFAULT_HIGH_ALARM_C};
+  float alarmHysteresisC {CoreConfig::DEFAULT_ALARM_HYSTERESIS_C};
   float tempOffsetC {0.0f};
   float tempSmoothingAlpha {CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA};
   char mqttHost[64] {"10.42.0.1"};
@@ -94,35 +168,70 @@ struct PersistentConfig {
   float pidKp {CoreConfig::PID_KP};
   float pidKi {CoreConfig::PID_KI};
   float pidKd {CoreConfig::PID_KD};
+  PidDirection pidDirection {PidDirection::Direct};
+  float maxOutputPercent {100.0f};
   float prevPidKp {CoreConfig::PID_KP};
   float prevPidKi {CoreConfig::PID_KI};
   float prevPidKd {CoreConfig::PID_KD};
   float tuneQualityScore {0.0f};
+  uint8_t displayBrightness {128};
+  bool buzzerEnabled {true};
   ProcessProfile profiles[CoreConfig::MAX_PROFILES];
   uint8_t profileCount {0};
   uint8_t activeProfileIndex {0};
 };
 
 struct RuntimeState {
+  OperatingMode operatingMode {OperatingMode::Standalone};
+  IntegrationState integrationState {IntegrationState::None};
   ControlMode controlMode {ControlMode::Local};
+  ControlAuthority controlAuthority {ControlAuthority::Local};
   RunState runState {RunState::Idle};
   UiMode uiMode {UiMode::SetpointAdjust};
+  SettingsSection settingsSection {SettingsSection::Status};
+  SettingsMenuLevel settingsMenuLevel {SettingsMenuLevel::SectionList};
 
   float currentTempC {NAN};
   float currentRawTempC {NAN};
+  float probeATempC {NAN};
+  float probeARawTempC {NAN};
+  float probeBTempC {NAN};
+  float probeBRawTempC {NAN};
   float currentSetpointC {CoreConfig::DEFAULT_SETPOINT_C};
   float heaterOutputPct {0.0f};
 
   bool wifiConnected {false};
   bool mqttConnected {false};
   bool sensorHealthy {false};
+  bool probeAHealthy {false};
+  bool probeBHealthy {false};
+  bool feedForwardEnabled {false};
   bool tempPlausible {true};
+  bool probeAPlausible {true};
+  bool probeBPlausible {true};
   bool heatingEnabled {false};
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};
   bool heatOn {false};
+  bool pairingWindowActive {false};
+  bool pairedMetadataPresent {false};
+  bool controllerEnrollmentPending {false};
+  bool controllerConnected {false};
+  bool integratedFallbackActive {false};
+  bool controlEnabled {true};
+  bool lowTempAlarmActive {false};
+  bool highTempAlarmActive {false};
+  DeviceType deviceType {DeviceType::ThermalController};
+  uint8_t probeCount {0};
+  uint8_t settingsItemIndex {0};
+  char sensorMode[8] {"single"};
   uint32_t lastValidMqttConnectionAtMs {0};
   uint32_t lastAcceptedRemoteCommandAtMs {0};
+  uint32_t pairingWindowEndsAtMs {0};
+  uint32_t lastControllerSupervisionAtMs {0};
+  char systemId[24] {"unbound"};
+  char systemName[32] {""};
+  char controllerId[24] {""};
 
   uint8_t currentStageIndex {0};
   uint32_t activeStageMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};

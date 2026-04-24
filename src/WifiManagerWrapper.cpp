@@ -26,11 +26,11 @@ void WifiManagerWrapper::buildPortalCredentials() {
            static_cast<unsigned long>(suffix));
 }
 
-void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqttHost, uint16_t defaultMqttPort) {
-  (void)defaultMqttHost;
-  (void)defaultMqttPort;
-
+void WifiManagerWrapper::beginStandalone(uint16_t portalTimeoutSec) {
   buildPortalCredentials();
+  _integratedMode = false;
+  _managedSsid[0] = '\0';
+  _managedPass[0] = '\0';
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
@@ -84,8 +84,42 @@ void WifiManagerWrapper::begin(uint16_t portalTimeoutSec, const char* defaultMqt
   _started = true;
 }
 
+void WifiManagerWrapper::beginIntegrated(const char* ssid, const char* password) {
+  buildPortalCredentials();
+  _integratedMode = true;
+  strlcpy(_managedSsid, ssid ? ssid : "", sizeof(_managedSsid));
+  strlcpy(_managedPass, password ? password : "", sizeof(_managedPass));
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);
+  WiFi.persistent(false);
+  _portalForced = false;
+  _disableForcedCredentials = true;
+  _authExpireCount = 0;
+  _lastAuthExpireMs = 0;
+  _lastReconnectAttemptMs = millis();
+
+  Serial.printf("[WiFi] integrated connect SSID=%s\n", _managedSsid);
+  WiFi.disconnect(false, false);
+  delay(100);
+  WiFi.begin(_managedSsid, _managedPass);
+  _started = true;
+}
+
 void WifiManagerWrapper::update() {
   if (_started) {
+    if (_integratedMode) {
+      if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
+        _lastReconnectAttemptMs = millis();
+        Serial.printf("[WiFi] reconnect attempt integrated SSID=%s\n", _managedSsid);
+        WiFi.disconnect(false, false);
+        delay(50);
+        WiFi.begin(_managedSsid, _managedPass);
+      }
+      return;
+    }
+
     _wm.process();
     if (_authExpireCount >= 6 && !_portalForced) {
       Serial.println("[WiFi] repeated AUTH_EXPIRE; clearing WiFi settings and starting portal");
@@ -123,6 +157,9 @@ const char* WifiManagerWrapper::getPortalApPassword() const {
 
 void WifiManagerWrapper::resetSettings() {
   _wm.resetSettings();
+  _managedSsid[0] = '\0';
+  _managedPass[0] = '\0';
+  _integratedMode = false;
   WiFi.disconnect(true, true);
   delay(120);
   WiFi.mode(WIFI_OFF);
