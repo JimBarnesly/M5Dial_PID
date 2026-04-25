@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <stdarg.h>
 
 extern bool gDebugEnabled;
 extern bool gDebugDisableWifi;
@@ -37,6 +38,29 @@ static inline const char* debugNetworkModeLabel() {
   return "network_enabled";
 }
 
-#define DBG_LOGF(...) do { if (gDebugEnabled) Serial.printf(__VA_ARGS__); } while (0)
-#define DBG_LOGLN(x) do { if (gDebugEnabled) Serial.println(x); } while (0)
-#define DBG_LOG(x) do { if (gDebugEnabled) Serial.print(x); } while (0)
+static inline decltype(Serial)& debugStream() {
+  return Serial;
+}
+
+static inline void debugBegin(unsigned long baud) {
+  debugStream().begin(baud);
+  const uint32_t started = millis();
+  while (millis() - started < 1500) {
+    if (debugStream()) break;
+    delay(10);
+  }
+}
+
+static inline void debugPrintf(const char* fmt, ...) {
+  if (!gDebugEnabled) return;
+  char buffer[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+  debugStream().print(buffer);
+}
+
+#define DBG_LOGF(...) do { if (gDebugEnabled) debugPrintf(__VA_ARGS__); } while (0)
+#define DBG_LOGLN(x) do { if (gDebugEnabled) debugStream().println(x); } while (0)
+#define DBG_LOG(x) do { if (gDebugEnabled) debugStream().print(x); } while (0)

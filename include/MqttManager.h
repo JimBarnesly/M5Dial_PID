@@ -50,9 +50,12 @@ private:
   void buildClientId();
   void configureClientForSecurity(bool force = false);
   uint16_t effectivePort() const;
+  void applyBrokerEndpoint();
   void tryReconnect();
   void handleMessage(char* topic, byte* payload, unsigned int length);
   void subscribeTopics();
+  const char* currentBrokerHost() const;
+  bool usingLiteralBrokerIp() const;
   String topicFor(const char* leaf) const;
   void publishShadow(const RuntimeState& rt, uint32_t remainingSec);
 };

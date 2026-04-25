@@ -1,0 +1,199 @@
+<script type="text/x-red" data-template-name="automation-controller-config">
+  <div class="form-row">
+    <label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-config-input-name">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-brokerHost"><i class="fa fa-server"></i> Broker Host</label>
+    <input type="text" id="node-config-input-brokerHost" placeholder="10.42.0.1">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-brokerPort"><i class="fa fa-plug"></i> Broker Port</label>
+    <input type="number" id="node-config-input-brokerPort" placeholder="1883">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-useTls"><i class="fa fa-lock"></i> Use TLS</label>
+    <input type="checkbox" id="node-config-input-useTls" style="display:inline-block; width:auto; vertical-align:top;">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-username"><i class="fa fa-user"></i> Username</label>
+    <input type="text" id="node-config-input-username">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-password"><i class="fa fa-key"></i> Password</label>
+    <input type="password" id="node-config-input-password">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-systemId"><i class="fa fa-sitemap"></i> System ID</label>
+    <input type="text" id="node-config-input-systemId" placeholder="unbound">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-deviceClass"><i class="fa fa-cubes"></i> Device Class</label>
+    <input type="text" id="node-config-input-deviceClass" placeholder="pid">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-deviceId"><i class="fa fa-microchip"></i> Device ID</label>
+    <input type="text" id="node-config-input-deviceId" placeholder="pid-XXXXXX">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-keepalive"><i class="fa fa-heartbeat"></i> Keepalive</label>
+    <input type="number" id="node-config-input-keepalive" placeholder="30">
+  </div>
+  <div class="form-row">
+    <label for="node-config-input-clientId"><i class="fa fa-id-badge"></i> Client ID</label>
+    <input type="text" id="node-config-input-clientId" placeholder="optional">
+  </div>
+</script>
+
+<script type="text/x-red" data-help-name="automation-controller-config">
+  <p>Shared controller configuration for the field-device nodes in this package.</p>
+  <p>It stores broker connection details and the topic base identity fields used to publish and subscribe directly over MQTT.</p>
+</script>
+
+<script type="text/javascript">
+(function() {
+  const paletteColor = "#7aa6c7";
+
+  const commandNodes = [
+    ["automation-setpoint", "Setpoint", "Uses msg.payload as numeric setpointC."],
+    ["automation-minutes", "Minutes", "Uses msg.payload as numeric stage time in minutes."],
+    ["automation-start", "Start", "Publishes a start command when triggered."],
+    ["automation-pause", "Pause", "Publishes a pause command when triggered."],
+    ["automation-stop", "Stop", "Publishes a stop command when triggered."],
+    ["automation-ack-alarm", "Ack Alarm", "Publishes an alarm acknowledge command."],
+    ["automation-reset-alarm", "Reset Alarm", "Publishes an alarm reset command."],
+    ["automation-mqtt-host", "MQTT Host", "Uses msg.payload as the broker host string."],
+    ["automation-mqtt-port", "MQTT Port", "Uses msg.payload as the broker port."],
+    ["automation-mqtt-tls", "MQTT TLS", "Uses msg.payload as 0, 1, true, or false."],
+    ["automation-mqtt-timeout", "MQTT Timeout", "Uses msg.payload as timeout seconds."],
+    ["automation-mqtt-fallback", "MQTT Fallback", "Uses msg.payload as fallback mode 0, 1, or 2."],
+    ["automation-wifi-portal-timeout", "WiFi Portal Timeout", "Uses msg.payload as portal timeout seconds."],
+    ["automation-reset-wifi", "Reset WiFi", "Publishes a reset WiFi command."],
+    ["automation-over-temp", "Over Temp", "Uses msg.payload as numeric over-temperature limit."],
+    ["automation-control-lock", "Control Lock", "Uses msg.payload as lock mode 0, 1, or 2."],
+    ["automation-pid", "PID", "Uses msg.payload = {kp, ki, kd}."],
+    ["automation-pid-kp", "PID Kp", "Uses msg.payload as numeric Kp."],
+    ["automation-pid-ki", "PID Ki", "Uses msg.payload as numeric Ki."],
+    ["automation-pid-kd", "PID Kd", "Uses msg.payload as numeric Kd."],
+    ["automation-start-autotune", "Start Autotune", "Publishes a start autotune command."],
+    ["automation-accept-tune", "Accept Tune", "Publishes an accept tune command."],
+    ["automation-reject-tune", "Reject Tune", "Publishes a reject tune command."],
+    ["automation-temp-calibration", "Temp Calibration", "Uses msg.payload = {tempOffsetC, tempSmoothingAlpha}."],
+    ["automation-calibration-status", "Calibration Status", "Publishes a calibration status request."],
+    ["automation-get-config", "Get Config", "Publishes a config snapshot request."],
+    ["automation-get-events", "Get Events", "Publishes an event log request."],
+    ["automation-profile-select", "Profile Select", "Uses msg.payload as a non-negative profile index."],
+    ["automation-profile-start", "Profile Start", "Uses msg.payload as a non-negative profile index."],
+    ["automation-profile-delete", "Profile Delete", "Uses msg.payload as a non-negative profile index."],
+    ["automation-profile-upsert", "Profile Upsert", "Uses msg.payload.profile or msg.payload as a profile object."],
+    ["automation-pairing-mode", "Pairing Mode", "Triggers the development pairing window helper."],
+    ["automation-bootstrap-inject", "Bootstrap Inject", "Uses msg.payload as a commissioning bootstrap object."],
+    ["automation-unpair", "Unpair", "Triggers the development unpair helper."],
+    ["automation-enrollment-response", "Enrollment Response", "Uses msg.payload as the enrollment response object."],
+    ["automation-controller-heartbeat", "Controller Heartbeat", "Uses msg.payload as controller_id string or object."]
+  ];
+
+  const receiveNodes = [
+    ["automation-status-in", "Status In", "Subscribes to the device status topic."],
+    ["automation-shadow-in", "Shadow In", "Subscribes to the device shadow topic."],
+    ["automation-config-in", "Config In", "Subscribes to effective config snapshots from /config."],
+    ["automation-command-ack-in", "Command Ack In", "Subscribes to command acknowledgements from /config."],
+    ["automation-events-in", "Events In", "Subscribes to runtime event log messages."],
+    ["automation-calibration-in", "Calibration In", "Subscribes to calibration status messages."],
+    ["automation-lifecycle-in", "Lifecycle In", "Subscribes to lifecycle messages such as profile completion."],
+    ["automation-enrollment-request-in", "Enrollment Request In", "Subscribes to controller enrollment requests."]
+  ];
+
+  function appendTemplate(typeName, bodyHtml) {
+    const script = document.createElement("script");
+    script.type = "text/x-red";
+    script.setAttribute("data-template-name", typeName);
+    script.text = bodyHtml;
+    document.head.appendChild(script);
+  }
+
+  function appendHelp(typeName, bodyHtml) {
+    const script = document.createElement("script");
+    script.type = "text/x-red";
+    script.setAttribute("data-help-name", typeName);
+    script.text = bodyHtml;
+    document.head.appendChild(script);
+  }
+
+  function sharedTemplate(label) {
+    return `
+      <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="${label}">
+      </div>
+      <div class="form-row">
+        <label for="node-input-controller"><i class="fa fa-cog"></i> Controller</label>
+        <input type="text" id="node-input-controller">
+      </div>
+    `;
+  }
+
+  RED.nodes.registerType("automation-controller-config", {
+    category: "config",
+    defaults: {
+      name: { value: "" },
+      brokerHost: { value: "10.42.0.1", required: true },
+      brokerPort: { value: 1883, required: true, validate: RED.validators.number() },
+      useTls: { value: false },
+      systemId: { value: "unbound", required: true },
+      deviceClass: { value: "pid", required: true },
+      deviceId: { value: "", required: true },
+      keepalive: { value: 30, required: true, validate: RED.validators.number() },
+      clientId: { value: "" }
+    },
+    credentials: {
+      username: { type: "text" },
+      password: { type: "password" }
+    },
+    label: function() {
+      return this.name || `${this.systemId || "unbound"}/${this.deviceId || "device"}`;
+    }
+  });
+
+  commandNodes.forEach(([type, label, help]) => {
+    appendTemplate(type, sharedTemplate(label));
+    appendHelp(type, `<p>${help}</p><p>This node publishes directly to the device MQTT topic using the selected controller config.</p>`);
+    RED.nodes.registerType(type, {
+      category: "automation",
+      color: paletteColor,
+      defaults: {
+        name: { value: "" },
+        controller: { type: "automation-controller-config", required: true }
+      },
+      inputs: 1,
+      outputs: 1,
+      icon: "font-awesome/fa-paper-plane",
+      align: "right",
+      paletteLabel: label,
+      label: function() {
+        return this.name || label;
+      }
+    });
+  });
+
+  receiveNodes.forEach(([type, label, help]) => {
+    appendTemplate(type, sharedTemplate(label));
+    appendHelp(type, `<p>${help}</p><p>This node subscribes directly to the device MQTT topic using the selected controller config.</p>`);
+    RED.nodes.registerType(type, {
+      category: "automation",
+      color: "#8dc28d",
+      defaults: {
+        name: { value: "" },
+        controller: { type: "automation-controller-config", required: true }
+      },
+      inputs: 0,
+      outputs: 1,
+      icon: "font-awesome/fa-rss",
+      paletteLabel: label,
+      label: function() {
+        return this.name || label;
+      }
+    });
+  });
+})();
+</script>

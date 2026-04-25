@@ -24,7 +24,7 @@ struct CommandRouterServices {
   bool& completionHandled;
   bool (*candidateWithinGuardrails)(float kp, float ki, float kd);
   void (*applyTunings)(float kp, float ki, float kd);
-  void (*startAutoTune)();
+  bool (*startAutoTune)();
   void (*persistActivePidAndQuality)();
   void (*logRuntimeEvent)(const char* text);
   void (*syncAlarmFromManager)();

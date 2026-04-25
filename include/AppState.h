@@ -71,23 +71,10 @@ enum class UiMode : uint8_t {
   StageTimeAdjust,
   Running,
   Paused,
-  SettingsAdjust
-};
-
-enum class SettingsSection : uint8_t {
-  Status = 0,
-  Control,
-  Pid,
-  Network,
-  Integration,
-  Device,
-  Exit
-};
-
-enum class SettingsMenuLevel : uint8_t {
-  SectionList = 0,
-  ItemList,
-  EditValue
+  SettingsAdjust,
+  AutoTuneIntro,
+  AutoTuneActive,
+  AutoTuneComplete
 };
 
 enum class AlarmCode : uint8_t {
@@ -117,6 +104,11 @@ struct RuntimeEvent {
   char text[48] {""};
 };
 
+struct AlarmHistoryEntry {
+  uint32_t atMs {0};
+  char text[48] {""};
+};
+
 struct IntegrationBinding {
   uint16_t schemaVersion {1};
   OperatingMode operatingMode {OperatingMode::Standalone};
@@ -141,6 +133,7 @@ struct PersistentConfig {
   char deviceId[24] {""};
   ControlLock controlLock {ControlLock::LocalOrRemote};
   bool controlEnabled {true};
+  bool testingModeEnabled {true};
   bool localAuthorityOverride {false};
   float localSetpointC {CoreConfig::DEFAULT_SETPOINT_C};
   uint32_t manualStageMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};
@@ -152,6 +145,12 @@ struct PersistentConfig {
   float lowAlarmC {CoreConfig::DEFAULT_LOW_ALARM_C};
   float highAlarmC {CoreConfig::DEFAULT_HIGH_ALARM_C};
   float alarmHysteresisC {CoreConfig::DEFAULT_ALARM_HYSTERESIS_C};
+  bool alarmEnableSensorFault {false};
+  bool alarmEnableOverTemp {false};
+  bool alarmEnableHeatingIneffective {false};
+  bool alarmEnableMqttOffline {false};
+  bool alarmEnableLowProcessTemp {false};
+  bool alarmEnableHighProcessTemp {false};
   float tempOffsetC {0.0f};
   float tempSmoothingAlpha {CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA};
   char mqttHost[64] {"10.42.0.1"};
@@ -188,8 +187,6 @@ struct RuntimeState {
   ControlAuthority controlAuthority {ControlAuthority::Local};
   RunState runState {RunState::Idle};
   UiMode uiMode {UiMode::SetpointAdjust};
-  SettingsSection settingsSection {SettingsSection::Status};
-  SettingsMenuLevel settingsMenuLevel {SettingsMenuLevel::SectionList};
 
   float currentTempC {NAN};
   float currentRawTempC {NAN};
@@ -219,11 +216,11 @@ struct RuntimeState {
   bool controllerConnected {false};
   bool integratedFallbackActive {false};
   bool controlEnabled {true};
+  bool testingModeActive {false};
   bool lowTempAlarmActive {false};
   bool highTempAlarmActive {false};
   DeviceType deviceType {DeviceType::ThermalController};
   uint8_t probeCount {0};
-  uint8_t settingsItemIndex {0};
   char sensorMode[8] {"single"};
   uint32_t lastValidMqttConnectionAtMs {0};
   uint32_t lastAcceptedRemoteCommandAtMs {0};
@@ -252,14 +249,16 @@ struct RuntimeState {
   float previousKp {CoreConfig::PID_KP};
   float previousKi {CoreConfig::PID_KI};
   float previousKd {CoreConfig::PID_KD};
+  uint32_t autoTuneUiStateAtMs {0};
 
   AlarmCode activeAlarm {AlarmCode::None};
   bool alarmAcknowledged {false};
   char alarmText[64] {"OK"};
-  char settingsLabel[24] {""};
-  char settingsValue[48] {""};
   RuntimeEvent eventLog[CoreConfig::EVENT_LOG_CAPACITY];
   uint8_t eventLogHead {0};
   uint8_t eventLogCount {0};
   bool pendingEventLogPublish {false};
+  AlarmHistoryEntry alarmHistory[CoreConfig::ALARM_HISTORY_CAPACITY];
+  uint8_t alarmHistoryHead {0};
+  uint8_t alarmHistoryCount {0};
 };

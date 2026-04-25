@@ -53,6 +53,21 @@ static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
 }
 
+const char* menuFooterText(const MenuRenderItem& item, bool editing) {
+  if (editing) return "TURN TO ADJUST  PRESS TO CONFIRM";
+
+  switch (item.kind) {
+    case MenuItemKind::Submenu: return "PRESS TO OPEN";
+    case MenuItemKind::Action: return "PRESS TO RUN";
+    case MenuItemKind::Value: return "PRESS TO EDIT";
+    case MenuItemKind::Back: return "PRESS TO RETURN";
+    case MenuItemKind::Exit: return "PRESS TO EXIT";
+    case MenuItemKind::ReadOnly:
+    default:
+      return "TURN TO SCROLL";
+  }
+}
+
 void fillInnerRectClipped(lgfx::LGFX_Device& d, int x, int y, int w, int h, uint16_t color) {
   constexpr int kSafeRadius = kRingInner - 2;
   const int radiusSq = kSafeRadius * kSafeRadius;
@@ -99,6 +114,8 @@ void DisplayManager::invalidateAll() {
   _lastHeatOn = false;
   _lastWifiConnected = false;
   _lastMqttConnected = false;
+  _lastTestingModeActive = false;
+  _lastOperatingMode = static_cast<OperatingMode>(255);
   _lastAlarm = static_cast<AlarmCode>(255);
   _lastRunState = static_cast<RunState>(255);
   _lastUiMode = static_cast<UiMode>(255);
@@ -106,6 +123,11 @@ void DisplayManager::invalidateAll() {
   _lastStageName[0] = '\0';
   _lastTempText[0] = '\0';
   _lastInfoText[0] = '\0';
+  _lastMenuTitle[0] = '\0';
+  _lastMenuEditing = false;
+  _lastMenuItemCount = 0;
+  _lastMenuSelectedIndex = 0xFF;
+  memset(_lastMenuItems, 0, sizeof(_lastMenuItems));
 }
 
 void DisplayManager::requestImmediateUi() { _lastUiServiceMs = 0; }
@@ -153,6 +175,15 @@ void DisplayManager::drawWifiGlyph(int x, int y, uint16_t color) {
   d.fillCircle(x, y + 6, 2, color);
 }
 
+void DisplayManager::drawNoIntegrationOverlay(int x, int y) {
+  auto& d = M5Dial.Display;
+  const uint16_t overlay = RED;
+  d.drawCircle(x, y, 10, overlay);
+  d.drawCircle(x, y, 9, overlay);
+  d.drawLine(x - 6, y + 6, x + 6, y - 6, overlay);
+  d.drawLine(x - 6, y + 5, x + 5, y - 6, overlay);
+}
+
 void DisplayManager::drawFireGlyph(int x, int y, uint16_t color) {
   auto& d = M5Dial.Display;
   d.fillTriangle(x, y - 11, x - 7, y + 4, x + 2, y + 8, color);
@@ -195,6 +226,135 @@ void DisplayManager::drawStaticUi() {
   d.fillRect(kWifiHitX, kWifiHitY, kWifiHitW, kWifiHitH, BG);
 
   _staticDrawn = true;
+}
+
+bool DisplayManager::menuStateChanged(const MenuRenderState& menuState) const {
+  if (_forceFull) return true;
+  if (strcmp(_lastMenuTitle, menuState.title) != 0) return true;
+  if (_lastMenuEditing != menuState.editing) return true;
+  if (_lastMenuItemCount != menuState.itemCount) return true;
+  if (_lastMenuSelectedIndex != menuState.selectedIndex) return true;
+
+  for (uint8_t i = 0; i < menuState.itemCount && i < 10; ++i) {
+    const MenuRenderItem& prev = _lastMenuItems[i];
+    const MenuRenderItem& next = menuState.items[i];
+    if (prev.id != next.id || prev.kind != next.kind || prev.selected != next.selected) return true;
+    if (strcmp(prev.label, next.label) != 0) return true;
+    if (strcmp(prev.value, next.value) != 0) return true;
+  }
+
+  return false;
+}
+
+void DisplayManager::cacheMenuState(const MenuRenderState& menuState) {
+  strlcpy(_lastMenuTitle, menuState.title, sizeof(_lastMenuTitle));
+  _lastMenuEditing = menuState.editing;
+  _lastMenuItemCount = menuState.itemCount;
+  _lastMenuSelectedIndex = menuState.selectedIndex;
+  memset(_lastMenuItems, 0, sizeof(_lastMenuItems));
+  for (uint8_t i = 0; i < menuState.itemCount && i < 10; ++i) {
+    _lastMenuItems[i] = menuState.items[i];
+  }
+}
+
+void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(BG);
+
+  d.fillCircle(kCx, kCy, 116, rgb(7, 11, 16));
+  d.drawCircle(kCx, kCy, 116, rgb(20, 34, 42));
+  d.drawCircle(kCx, kCy, 108, rgb(14, 24, 31));
+  d.drawArc(kCx, kCy, 116, 114, 210, 320, rgb(38, 68, 82));
+
+  d.setTextDatum(top_center);
+  d.setTextColor(FG_MUTED, BG);
+  d.setFont(&fonts::Font2);
+  d.drawString(menuState.title[0] ? menuState.title : "MENU", 120, 18);
+
+  const int selected = menuState.selectedIndex;
+  const int centerY = 120;
+  const int selectedBoxY = 92;
+  d.fillRoundRect(22, selectedBoxY, 196, 54, 16, rgb(14, 31, 42));
+  d.drawRoundRect(22, selectedBoxY, 196, 54, 16, menuState.editing ? GOLD : rgb(58, 98, 116));
+
+  for (int distance = -2; distance <= 2; ++distance) {
+    const int index = selected + distance;
+    if (index < 0 || index >= menuState.itemCount) continue;
+
+    const MenuRenderItem& item = menuState.items[index];
+    const bool isSelected = (distance == 0);
+    const int absDistance = abs(distance);
+
+    int y = centerY;
+    const lgfx::IFont* font = &fonts::Font4;
+    uint16_t color = FG;
+
+    if (isSelected) {
+      y = centerY - 10;
+      font = &fonts::Font4;
+      color = FG;
+    } else if (absDistance == 1) {
+      y = centerY + (distance * 42) - 7;
+      font = &fonts::Font2;
+      color = rgb(182, 194, 202);
+    } else {
+      y = centerY + (distance * 70) - 5;
+      font = &fonts::Font0;
+      color = rgb(110, 124, 132);
+    }
+
+    d.setFont(font);
+    d.setTextDatum(middle_center);
+    d.setTextColor(color, BG);
+    d.drawString(item.label, 120, y);
+
+    if (!isSelected) continue;
+
+    if (item.kind == MenuItemKind::Submenu) {
+      d.setTextDatum(middle_right);
+      d.setFont(&fonts::Font2);
+      d.setTextColor(rgb(144, 198, 224), BG);
+      d.drawString(">", 206, centerY);
+    }
+
+    if (item.value[0] != '\0') {
+      d.setTextDatum(top_center);
+      d.setFont(&fonts::Font2);
+      d.setTextColor(menuState.editing ? GOLD : rgb(132, 205, 238), BG);
+      d.drawString(item.value, 120, centerY + 10);
+    }
+  }
+
+  if (menuState.itemCount > 0) {
+    const MenuRenderItem& selectedItem = menuState.items[menuState.selectedIndex];
+    d.setTextDatum(bottom_center);
+    d.setFont(&fonts::Font0);
+    d.setTextColor(rgb(120, 130, 136), BG);
+    d.drawString(menuFooterText(selectedItem, menuState.editing), 120, 226);
+  }
+}
+
+void DisplayManager::drawMessageScreen(const char* title, const char* detail, const char* footer) {
+  auto& d = M5Dial.Display;
+  d.fillScreen(BG);
+
+  d.fillCircle(kCx, kCy, 116, rgb(7, 11, 16));
+  d.drawCircle(kCx, kCy, 116, rgb(20, 34, 42));
+  d.drawCircle(kCx, kCy, 108, rgb(14, 24, 31));
+  d.drawArc(kCx, kCy, 116, 114, 210, 320, rgb(38, 68, 82));
+
+  d.setTextDatum(middle_center);
+  d.setTextColor(FG, BG);
+  d.setFont(&fonts::Font4);
+  d.drawString(title ? title : "", 120, 88);
+
+  d.setFont(&fonts::Font2);
+  d.setTextColor(rgb(182, 194, 202), BG);
+  d.drawString(detail ? detail : "", 120, 126);
+
+  d.setFont(&fonts::Font0);
+  d.setTextColor(rgb(132, 205, 238), BG);
+  d.drawString(footer ? footer : "", 120, 174);
 }
 
 void DisplayManager::drawRing(float progress, bool timerStarted, RunState runState, uint32_t remainingSec, bool force) {
@@ -250,21 +410,12 @@ void DisplayManager::drawRing(float progress, bool timerStarted, RunState runSta
 void DisplayManager::drawStagePill(const RuntimeState& rt, const ProcessStage* stage, bool force) {
   const char* text = nullptr;
   if (rt.activeAlarm != AlarmCode::None) text = rt.alarmText;
-  else if (rt.uiMode == UiMode::SettingsAdjust) {
-    switch (rt.settingsSection) {
-      case SettingsSection::Status: text = "STATUS"; break;
-      case SettingsSection::Control: text = "CONTROL"; break;
-      case SettingsSection::Pid: text = "PID SETTINGS"; break;
-      case SettingsSection::Network: text = "NETWORK"; break;
-      case SettingsSection::Integration: text = "INTEGRATION"; break;
-      case SettingsSection::Device: text = "DEVICE"; break;
-      case SettingsSection::Exit: text = "EXIT"; break;
-      default: text = "SETTINGS"; break;
-    }
-  } else if (rt.uiMode == UiMode::SetpointAdjust) text = "SET TEMP";
+  else if (rt.uiMode == UiMode::AutoTuneActive || rt.runState == RunState::AutoTune) text = "AUTOTUNE";
+  else if (rt.uiMode == UiMode::SetpointAdjust) text = "SET TEMP";
   else if (rt.uiMode == UiMode::StageTimeAdjust) text = "SET TIME";
   else if (rt.runState == RunState::Complete) text = "COMPLETE";
   else if (rt.runState == RunState::Paused) text = "PAUSED";
+  else if (rt.runState == RunState::Fault) text = "FAULT";
   else if (stage) text = stage->name;
   else text = "IDLE";
 
@@ -357,17 +508,6 @@ void DisplayManager::drawCenterTemp(const RuntimeState& rt, uint32_t now, bool f
 }
 
 void DisplayManager::drawTargetRow(const RuntimeState& rt, bool force) {
-  if (rt.uiMode == UiMode::SettingsAdjust) {
-    auto& d = M5Dial.Display;
-    d.fillRect(kTargetRowX, kTargetRowY, kTargetRowW, kTargetRowH, BG);
-    d.setTextDatum(middle_center);
-    d.setFont(&fonts::Font2);
-    d.setTextColor(GOLD, BG);
-    d.drawString(rt.settingsLabel[0] ? rt.settingsLabel : "SETTINGS", 120, kTargetRowY + (kTargetRowH / 2));
-    _lastSetpointC = rt.currentSetpointC;
-    return;
-  }
-
   if (!force && fabsf(_lastSetpointC - rt.currentSetpointC) < 0.05f) return;
 
   auto& d = M5Dial.Display;
@@ -386,8 +526,8 @@ void DisplayManager::drawTargetRow(const RuntimeState& rt, bool force) {
 
 void DisplayManager::drawInfoRow(const RuntimeState& rt, uint32_t remainingSec, bool force) {
   char infoBuf[32];
-  if (rt.uiMode == UiMode::SettingsAdjust) {
-    snprintf(infoBuf, sizeof(infoBuf), "%s", rt.settingsValue[0] ? rt.settingsValue : "--");
+  if (rt.uiMode == UiMode::AutoTuneActive || rt.runState == RunState::AutoTune) {
+    infoBuf[0] = '\0';
   } else if (rt.uiMode == UiMode::StageTimeAdjust) {
     snprintf(infoBuf, sizeof(infoBuf), "%s", formatMinutes(rt.activeStageMinutes).c_str());
   } else if (rt.activeStageMinutes == 0 && (rt.runState == RunState::Running || rt.runState == RunState::Paused)) {
@@ -409,6 +549,22 @@ void DisplayManager::drawInfoRow(const RuntimeState& rt, uint32_t remainingSec, 
   _lastRemainingSec = remainingSec;
 }
 
+void DisplayManager::drawTestingBadge(const RuntimeState& rt, bool force) {
+  if (!force && _lastTestingModeActive == rt.testingModeActive) return;
+
+  auto& d = M5Dial.Display;
+  fillInnerRectClipped(d, 28, 116, 28, 24, BG);
+
+  if (rt.testingModeActive) {
+    d.setTextDatum(top_center);
+    d.setFont(&fonts::Font2);
+    d.setTextColor(RED, BG);
+    d.drawString("T", 42, 118);
+  }
+
+  _lastTestingModeActive = rt.testingModeActive;
+}
+
 void DisplayManager::drawHeatIcon(const RuntimeState& rt, bool force) {
   const bool on = rt.heatOn;
   if (!force && _lastHeatOn == on) return;
@@ -421,23 +577,66 @@ void DisplayManager::drawHeatIcon(const RuntimeState& rt, bool force) {
 }
 
 void DisplayManager::drawWifiIcon(const RuntimeState& rt, bool force) {
-  if (!force && _lastWifiConnected == rt.wifiConnected && _lastMqttConnected == rt.mqttConnected) return;
+  if (!force &&
+      _lastWifiConnected == rt.wifiConnected &&
+      _lastMqttConnected == rt.mqttConnected &&
+      _lastOperatingMode == rt.operatingMode) return;
 
   auto& d = M5Dial.Display;
   fillInnerRectClipped(d, 28, 84, 28, 28, BG);
 
   uint16_t color = OUTLINE_SOFT;
-  if (rt.wifiConnected && rt.mqttConnected) color = BLUE;
-  else if (rt.wifiConnected) color = GOLD;
-
-  drawWifiGlyph(42, kIconCenterY, color);
+  if (rt.operatingMode == OperatingMode::Standalone) {
+    if (rt.wifiConnected && rt.mqttConnected) color = BLUE;
+    else if (rt.wifiConnected) color = GOLD;
+    else color = rgb(92, 132, 116);
+    drawWifiGlyph(42, kIconCenterY, color);
+    drawNoIntegrationOverlay(42, kIconCenterY - 4);
+  } else {
+    if (rt.wifiConnected && rt.mqttConnected) color = BLUE;
+    else if (rt.wifiConnected) color = GOLD;
+    drawWifiGlyph(42, kIconCenterY, color);
+  }
 
   _lastWifiConnected = rt.wifiConnected;
   _lastMqttConnected = rt.mqttConnected;
+  _lastOperatingMode = rt.operatingMode;
 }
 
-void DisplayManager::draw(const PersistentConfig&, const RuntimeState& rt, const ProcessStage* stage, uint32_t remainingSec) {
+void DisplayManager::draw(const PersistentConfig&, const RuntimeState& rt, const ProcessStage* stage, uint32_t remainingSec, const MenuRenderState* menuState) {
   const uint32_t now = millis();
+  if (rt.uiMode == UiMode::AutoTuneIntro) {
+    if (_forceFull || _lastUiMode != rt.uiMode) {
+      M5Dial.Display.startWrite();
+      drawMessageScreen("Autotune beginning", "To exit, hold the button", "for 5 seconds");
+      M5Dial.Display.endWrite();
+      _lastUiMode = rt.uiMode;
+      _forceFull = false;
+    }
+    return;
+  }
+
+  if (rt.uiMode == UiMode::AutoTuneComplete) {
+    if (_forceFull || _lastUiMode != rt.uiMode) {
+      M5Dial.Display.startWrite();
+      drawMessageScreen("Autotune Complete", "Tuned values are ready", "Press button to return");
+      M5Dial.Display.endWrite();
+      _lastUiMode = rt.uiMode;
+      _forceFull = false;
+    }
+    return;
+  }
+
+  if (rt.uiMode == UiMode::SettingsAdjust && menuState) {
+    if (!menuStateChanged(*menuState)) return;
+    M5Dial.Display.startWrite();
+    drawMenuScreen(*menuState);
+    M5Dial.Display.endWrite();
+    cacheMenuState(*menuState);
+    _forceFull = false;
+    return;
+  }
+
   if (!_staticDrawn || _forceFull) drawStaticUi();
   if (!_forceFull && (now - _lastUiServiceMs < Config::UI_SERVICE_MS)) return;
   _lastUiServiceMs = now;
@@ -465,6 +664,7 @@ void DisplayManager::draw(const PersistentConfig&, const RuntimeState& rt, const
   drawCenterTemp(rt, now, _forceFull);
   drawTargetRow(rt, _forceFull);
   drawInfoRow(rt, remainingSec, _forceFull);
+  drawTestingBadge(rt, _forceFull);
   drawHeatIcon(rt, _forceFull);
   drawWifiIcon(rt, _forceFull);
   M5Dial.Display.endWrite();

@@ -665,8 +665,12 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
       finishAck();
       return;
     }
-    services.startAutoTune();
-    services.logRuntimeEvent("Autotune started");
+    if (!services.startAutoTune()) {
+      applied = false;
+      reason = "autotune_start_failed";
+      finishAck();
+      return;
+    }
     services.display.invalidateAll();
   } else if (t.endsWith(CommandSuffix::AcceptTune)) {
     command = "accept_tune";

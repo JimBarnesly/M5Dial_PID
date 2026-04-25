@@ -44,6 +44,7 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   buildDefaultDeviceId(cfg.deviceId, sizeof(cfg.deviceId));
   cfg.controlLock = ControlLock::LocalOrRemote;
   cfg.controlEnabled = true;
+  cfg.testingModeEnabled = CoreConfig::DEFAULT_TESTING_MODE_ENABLED;
   cfg.localAuthorityOverride = false;
   cfg.localSetpointC = 65.0f;
   cfg.minSetpointC = CoreConfig::DEFAULT_MIN_SETPOINT_C;
@@ -51,10 +52,16 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.stageStartBandC = 2.0f;
   cfg.manualStageMinutes = 60;
   cfg.overTempC = 99.0f;
-  cfg.tempAlarmEnabled = true;
+  cfg.tempAlarmEnabled = false;
   cfg.lowAlarmC = CoreConfig::DEFAULT_LOW_ALARM_C;
   cfg.highAlarmC = CoreConfig::DEFAULT_HIGH_ALARM_C;
   cfg.alarmHysteresisC = CoreConfig::DEFAULT_ALARM_HYSTERESIS_C;
+  cfg.alarmEnableSensorFault = false;
+  cfg.alarmEnableOverTemp = false;
+  cfg.alarmEnableHeatingIneffective = false;
+  cfg.alarmEnableMqttOffline = false;
+  cfg.alarmEnableLowProcessTemp = false;
+  cfg.alarmEnableHighProcessTemp = false;
   cfg.tempOffsetC = 0.0f;
   cfg.tempSmoothingAlpha = CoreConfig::DEFAULT_TEMP_SMOOTHING_ALPHA;
   strncpy(cfg.mqttHost, "10.42.0.1", sizeof(cfg.mqttHost)-1);
@@ -101,6 +108,7 @@ bool StorageManager::load(PersistentConfig& cfg) {
   loadDefaults(cfg);
   cfg.localSetpointC = doc["localSetpointC"] | cfg.localSetpointC;
   cfg.controlEnabled = doc["controlEnabled"] | cfg.controlEnabled;
+  cfg.testingModeEnabled = doc["testingModeEnabled"] | cfg.testingModeEnabled;
   cfg.localAuthorityOverride = doc["localAuthorityOverride"] | cfg.localAuthorityOverride;
   cfg.minSetpointC = doc["minSetpointC"] | cfg.minSetpointC;
   cfg.maxSetpointC = doc["maxSetpointC"] | cfg.maxSetpointC;
@@ -111,6 +119,12 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.lowAlarmC = doc["lowAlarmC"] | cfg.lowAlarmC;
   cfg.highAlarmC = doc["highAlarmC"] | cfg.highAlarmC;
   cfg.alarmHysteresisC = doc["alarmHysteresisC"] | cfg.alarmHysteresisC;
+  cfg.alarmEnableSensorFault = doc["alarmEnableSensorFault"] | cfg.alarmEnableSensorFault;
+  cfg.alarmEnableOverTemp = doc["alarmEnableOverTemp"] | cfg.alarmEnableOverTemp;
+  cfg.alarmEnableHeatingIneffective = doc["alarmEnableHeatingIneffective"] | cfg.alarmEnableHeatingIneffective;
+  cfg.alarmEnableMqttOffline = doc["alarmEnableMqttOffline"] | cfg.alarmEnableMqttOffline;
+  cfg.alarmEnableLowProcessTemp = doc["alarmEnableLowProcessTemp"] | cfg.alarmEnableLowProcessTemp;
+  cfg.alarmEnableHighProcessTemp = doc["alarmEnableHighProcessTemp"] | cfg.alarmEnableHighProcessTemp;
   cfg.tempOffsetC = doc["tempOffsetC"] | cfg.tempOffsetC;
   cfg.tempSmoothingAlpha = doc["tempSmoothingAlpha"] | cfg.tempSmoothingAlpha;
   cfg.controlLock = static_cast<ControlLock>((uint8_t)(doc["controlLock"] | (uint8_t)cfg.controlLock));
@@ -191,6 +205,7 @@ void StorageManager::save(const PersistentConfig& cfg) {
   JsonDocument doc;
   doc["localSetpointC"] = cfg.localSetpointC;
   doc["controlEnabled"] = cfg.controlEnabled;
+  doc["testingModeEnabled"] = cfg.testingModeEnabled;
   doc["localAuthorityOverride"] = cfg.localAuthorityOverride;
   doc["systemId"] = cfg.systemId;
   doc["deviceId"] = cfg.deviceId;
@@ -203,6 +218,12 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["lowAlarmC"] = cfg.lowAlarmC;
   doc["highAlarmC"] = cfg.highAlarmC;
   doc["alarmHysteresisC"] = cfg.alarmHysteresisC;
+  doc["alarmEnableSensorFault"] = cfg.alarmEnableSensorFault;
+  doc["alarmEnableOverTemp"] = cfg.alarmEnableOverTemp;
+  doc["alarmEnableHeatingIneffective"] = cfg.alarmEnableHeatingIneffective;
+  doc["alarmEnableMqttOffline"] = cfg.alarmEnableMqttOffline;
+  doc["alarmEnableLowProcessTemp"] = cfg.alarmEnableLowProcessTemp;
+  doc["alarmEnableHighProcessTemp"] = cfg.alarmEnableHighProcessTemp;
   doc["tempOffsetC"] = cfg.tempOffsetC;
   doc["tempSmoothingAlpha"] = cfg.tempSmoothingAlpha;
   doc["controlLock"] = (uint8_t)cfg.controlLock;

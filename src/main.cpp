@@ -20,7 +20,9 @@
 #include "CommandRouter.h"
 #include "IntegrationManager.h"
 #include "DisplayManager.h"
+#include "MenuSystem.h"
 #include "DebugControl.h"
+#include "TestingMode.h"
 #include "platform/m5dial/M5DialBuzzer.h"
 #include "platform/m5dial/M5DialDigitalOut.h"
 
@@ -28,8 +30,6 @@ bool gDebugEnabled = true;
 bool gDebugDisableWifi = false;
 bool gDebugDisableMqtt = false;
 bool gDebugVerboseInput = false;
-
-#define DBG_BEGIN(...) do { if (gDebugEnabled) Serial.begin(__VA_ARGS__); } while (0)
 #define DBG_PRINTLN(x) DBG_LOGLN(x)
 #define DBG_PRINT(x) DBG_LOG(x)
 #define DBG_PRINTF(...) DBG_LOGF(__VA_ARGS__)
@@ -49,6 +49,8 @@ MqttManager gMqtt;
 IntegrationBinding gBinding;
 IntegrationManager gIntegration;
 DisplayManager gDisplay;
+MenuSystem gMenu;
+MenuRenderState gMenuRenderState;
 uint32_t gLastStatusMs = 0, gLastPidMs = 0, gLastMqttServiceMs = 0, gHeatEvalWindowStart = 0;
 float gHeatEvalStartTemp = NAN;
 bool gCompletionHandled = false;
@@ -58,6 +60,14 @@ bool gOtaInitialized = false;
 static void persistAndPublishConfig();
 static void applyLocalAuthorityOverride(bool enabled);
 static void logRuntimeEvent(const char* text);
+static void logAlarmHistory(const char* text);
+static void playUiTone(uint16_t frequency, uint32_t durationMs);
+static float clampSetpointToLimits(float requested);
+void syncAlarmFromManager();
+
+static bool testingModeActive() {
+  return TestingMode::enabled(gCfg);
+}
 
 struct AutoTuneContext {
   bool active {false};
@@ -82,6 +92,8 @@ constexpr float kAutoTuneStepC = 2.0f;
 constexpr uint32_t kAutoTuneMaxPerturbMs = 600000;
 constexpr uint32_t kAutoTuneSettleBandMs = 20000;
 constexpr float kAutoTuneSettleBandC = 0.3f;
+constexpr uint32_t kAutoTuneIntroScreenMs = 1800;
+constexpr uint32_t kAutoTuneExitHoldMs = 5000;
 
 static bool finitePositive(float v) {
   return isfinite(v) && v > 0.0f;
@@ -100,6 +112,15 @@ static bool candidateWithinGuardrails(float kp, float ki, float kd) {
          kp <= 60.0f && ki <= 2.0f && kd <= 80.0f;
 }
 
+static void markAutoTuneSetpointStep(float targetTempC) {
+  if (isfinite(targetTempC)) {
+    char text[48] {};
+    snprintf(text, sizeof(text), "Autotune target %.1fC", targetTempC);
+    logRuntimeEvent(text);
+  }
+  playUiTone(2600, 80);
+}
+
 static void applyTunings(float kp, float ki, float kd) {
   gPid.setTunings(kp, ki, kd);
   gPid.setReverseActing(gCfg.pidDirection == PidDirection::Reverse);
@@ -114,12 +135,25 @@ static void failAutoTuneAndRevert() {
   gAutoTune.active = false;
   gRt.autoTunePhase = AutoTunePhase::Failed;
   gRt.runState = RunState::Idle;
+  gRt.uiMode = UiMode::SetpointAdjust;
+  gRt.currentSetpointC = clampSetpointToLimits(gCfg.localSetpointC);
   gHeater.setMaxOutputPercent(100.0f);
   applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
 }
 
-static void startAutoTune() {
-  if (!gRt.sensorHealthy || isnan(gRt.currentTempC)) return;
+static bool startAutoTune() {
+  if (!gRt.sensorHealthy || isnan(gRt.currentTempC)) {
+    logRuntimeEvent("Autotune blocked: sensor unavailable");
+    return false;
+  }
+  if (gRt.runState == RunState::Running || gRt.runState == RunState::Paused) {
+    logRuntimeEvent("Autotune blocked: stop run first");
+    return false;
+  }
+  if (gRt.runState == RunState::AutoTune) {
+    logRuntimeEvent("Autotune already running");
+    return false;
+  }
   if (gRt.operatingMode == OperatingMode::Integrated && !gCfg.localAuthorityOverride) {
     applyLocalAuthorityOverride(true);
     persistAndPublishConfig();
@@ -136,11 +170,17 @@ static void startAutoTune() {
   gAutoTune.peakTempC = gRt.currentTempC;
   gRt.autoTunePhase = AutoTunePhase::Perturbing;
   gRt.runState = RunState::AutoTune;
+  gRt.uiMode = UiMode::AutoTuneIntro;
+  gRt.autoTuneUiStateAtMs = millis();
+  gRt.currentSetpointC = gAutoTune.targetTempC;
   gRt.autoTuneRiseTimeSec = 0.0f;
   gRt.autoTuneOvershootC = 0.0f;
   gRt.autoTuneSettlingSec = 0.0f;
   gRt.autoTuneQualityScore = 0.0f;
   gHeater.setMaxOutputPercent(kAutoTuneHeaterMaxPct);
+  markAutoTuneSetpointStep(gAutoTune.targetTempC);
+  logRuntimeEvent("Autotune started");
+  return true;
 }
 
 static void finalizeAutoTuneCandidate() {
@@ -162,6 +202,9 @@ static void finalizeAutoTuneCandidate() {
   applyTunings(gAutoTune.candidateKp, gAutoTune.candidateKi, gAutoTune.candidateKd);
   gRt.autoTunePhase = AutoTunePhase::PendingAccept;
   gRt.runState = RunState::Idle;
+  gRt.uiMode = UiMode::AutoTuneComplete;
+  gRt.autoTuneUiStateAtMs = millis();
+  gRt.currentSetpointC = clampSetpointToLimits(gCfg.localSetpointC);
   gAutoTune.active = false;
   gHeater.setMaxOutputPercent(100.0f);
 }
@@ -239,6 +282,12 @@ static void debugLogBanner() {
              debugRuntimeNetworkTogglesEnabled());
 }
 
+static void initDebugTransport() {
+  if (!gDebugEnabled) return;
+  debugBegin(115200);
+  DBG_PRINTLN("[BOOT] debug transport ready (USB CDC primary)");
+}
+
 static String maskSecret(const char* value) {
   if (!value || value[0] == '\0') return "<empty>";
   const size_t len = strlen(value);
@@ -252,7 +301,7 @@ static String maskSecret(const char* value) {
 }
 
 static void debugPrintState(const char* tag) {
-  DBG_PRINTF("[%s] op=%s int=%u run=%u ui=%u temp=%.2f probeA=%.2f probeB=%.2f sp=%.2f mins=%lu out=%.1f heat=%d wifi=%d mqtt=%d ctrl=%d fallback=%d timer=%d alarm=%u mode=%s ff=%d probes=%u\n",
+  DBG_PRINTF("[%s] op=%s int=%u run=%u ui=%u temp=%.2f probeA=%.2f probeB=%.2f sp=%.2f mins=%lu out=%.1f heat=%d wifi=%d mqtt=%d ctrl=%d fallback=%d timer=%d alarm=%u test=%d mode=%s ff=%d probes=%u\n",
              tag,
              gRt.operatingMode == OperatingMode::Integrated ? "integrated" : "standalone",
              static_cast<unsigned>(gRt.integrationState),
@@ -271,6 +320,7 @@ static void debugPrintState(const char* tag) {
              gRt.integratedFallbackActive,
              gRt.stageTimerStarted,
              (unsigned)gRt.activeAlarm,
+             gRt.testingModeActive,
              gRt.sensorMode,
              gRt.feedForwardEnabled,
              static_cast<unsigned>(gRt.probeCount));
@@ -312,6 +362,110 @@ static const char* alarmText(AlarmCode code) {
   }
 }
 
+static bool isAlarmEnabled(AlarmCode code) {
+  if (TestingMode::alarmsForcedOff(gCfg)) return false;
+  switch (code) {
+    case AlarmCode::SensorFault: return gCfg.alarmEnableSensorFault;
+    case AlarmCode::OverTemp: return gCfg.alarmEnableOverTemp;
+    case AlarmCode::HeatingIneffective: return gCfg.alarmEnableHeatingIneffective;
+    case AlarmCode::MqttOffline: return gCfg.alarmEnableMqttOffline;
+    case AlarmCode::LowProcessTemp: return gCfg.alarmEnableLowProcessTemp;
+    case AlarmCode::HighProcessTemp: return gCfg.alarmEnableHighProcessTemp;
+    case AlarmCode::None:
+    default:
+      return false;
+  }
+}
+
+static void syncLegacyAlarmFlags() {
+  gCfg.tempAlarmEnabled = gCfg.alarmEnableLowProcessTemp || gCfg.alarmEnableHighProcessTemp;
+}
+
+static bool allAlarmTogglesEnabled() {
+  return gCfg.alarmEnableSensorFault &&
+         gCfg.alarmEnableOverTemp &&
+         gCfg.alarmEnableHeatingIneffective &&
+         gCfg.alarmEnableMqttOffline &&
+         gCfg.alarmEnableLowProcessTemp &&
+         gCfg.alarmEnableHighProcessTemp;
+}
+
+static bool allAlarmTogglesDisabled() {
+  return !gCfg.alarmEnableSensorFault &&
+         !gCfg.alarmEnableOverTemp &&
+         !gCfg.alarmEnableHeatingIneffective &&
+         !gCfg.alarmEnableMqttOffline &&
+         !gCfg.alarmEnableLowProcessTemp &&
+         !gCfg.alarmEnableHighProcessTemp;
+}
+
+static void setAllAlarmToggles(bool enabled) {
+  gCfg.alarmEnableSensorFault = enabled;
+  gCfg.alarmEnableOverTemp = enabled;
+  gCfg.alarmEnableHeatingIneffective = enabled;
+  gCfg.alarmEnableMqttOffline = enabled;
+  gCfg.alarmEnableLowProcessTemp = enabled;
+  gCfg.alarmEnableHighProcessTemp = enabled;
+  syncLegacyAlarmFlags();
+}
+
+static const char* alarmToggleText(bool enabled) {
+  return enabled ? "On" : "Off [TEST]";
+}
+
+static uint8_t alarmHistoryMenuOffset(MenuItemId id) {
+  return static_cast<uint8_t>(static_cast<uint16_t>(id) - static_cast<uint16_t>(MenuItemId::AlarmLogEntry0));
+}
+
+static bool tryGetAlarmToggle(MenuItemId id, bool*& flag) {
+  flag = nullptr;
+  switch (id) {
+    case MenuItemId::AlarmSensorFault: flag = &gCfg.alarmEnableSensorFault; return true;
+    case MenuItemId::AlarmOverTemp: flag = &gCfg.alarmEnableOverTemp; return true;
+    case MenuItemId::AlarmHeatingIneffective: flag = &gCfg.alarmEnableHeatingIneffective; return true;
+    case MenuItemId::AlarmMqttOffline: flag = &gCfg.alarmEnableMqttOffline; return true;
+    case MenuItemId::AlarmLowProcessTemp: flag = &gCfg.alarmEnableLowProcessTemp; return true;
+    case MenuItemId::AlarmHighProcessTemp: flag = &gCfg.alarmEnableHighProcessTemp; return true;
+    default: return false;
+  }
+}
+
+static void formatMsTimestamp(uint32_t atMs, char* out, size_t outSize) {
+  const uint32_t totalSeconds = atMs / 1000UL;
+  const uint32_t hours = totalSeconds / 3600UL;
+  const uint32_t minutes = (totalSeconds / 60UL) % 60UL;
+  const uint32_t seconds = totalSeconds % 60UL;
+  snprintf(out, outSize, "%02lu:%02lu:%02lu",
+           static_cast<unsigned long>(hours),
+           static_cast<unsigned long>(minutes),
+           static_cast<unsigned long>(seconds));
+}
+
+static void clearAlarmHistory() {
+  memset(gRt.alarmHistory, 0, sizeof(gRt.alarmHistory));
+  gRt.alarmHistoryHead = 0;
+  gRt.alarmHistoryCount = 0;
+}
+
+static void logAlarmHistory(const char* text) {
+  if (!text || text[0] == '\0') return;
+  AlarmHistoryEntry& entry = gRt.alarmHistory[gRt.alarmHistoryHead];
+  entry.atMs = millis();
+  strlcpy(entry.text, text, sizeof(entry.text));
+  gRt.alarmHistoryHead = (gRt.alarmHistoryHead + 1) % CoreConfig::ALARM_HISTORY_CAPACITY;
+  if (gRt.alarmHistoryCount < CoreConfig::ALARM_HISTORY_CAPACITY) ++gRt.alarmHistoryCount;
+}
+
+static void raiseAlarm(AlarmCode code, const char* eventText, bool beep = true) {
+  if (!isAlarmEnabled(code)) return;
+  const bool changed = gAlarm.getAlarm() != code;
+  gAlarm.setAlarm(code, alarmText(code), beep);
+  if (changed) {
+    logRuntimeEvent(eventText);
+    logAlarmHistory(eventText);
+  }
+}
+
 static float clampSetpointToLimits(float requested) {
   const float minLimit = min(gCfg.minSetpointC, gCfg.maxSetpointC);
   const float maxLimit = max(gCfg.minSetpointC, gCfg.maxSetpointC);
@@ -328,19 +482,6 @@ static const char* controlAuthorityText(ControlAuthority authority) {
   }
 }
 
-static const char* settingsSectionText(SettingsSection section) {
-  switch (section) {
-    case SettingsSection::Status: return "STATUS";
-    case SettingsSection::Control: return "CONTROL";
-    case SettingsSection::Pid: return "PID SETTINGS";
-    case SettingsSection::Network: return "NETWORK";
-    case SettingsSection::Integration: return "INTEGRATION";
-    case SettingsSection::Device: return "DEVICE";
-    case SettingsSection::Exit: return "EXIT";
-    default: return "SETTINGS";
-  }
-}
-
 static void playUiTone(uint16_t frequency, uint32_t durationMs) {
   if (gCfg.buzzerEnabled) M5Dial.Speaker.tone(frequency, durationMs);
 }
@@ -353,12 +494,33 @@ static void syncControlAuthority() {
   gRt.controlMode = (gRt.controlAuthority == ControlAuthority::Controller) ? ControlMode::Remote : ControlMode::Local;
 }
 
+static void applyTestingModeOperatingOverride() {
+  if (!gRt.testingModeActive) return;
+
+  // Keep testing mode on the integrated runtime path so the device can
+  // connect to the automation controller and receive controller commands.
+  gRt.operatingMode = OperatingMode::Integrated;
+  if (gRt.integrationState == IntegrationState::None) {
+    gRt.integrationState = IntegrationState::Enrolled;
+  }
+}
+
 static bool localRuntimeAuthorityActive() {
   return gRt.controlAuthority != ControlAuthority::Controller;
 }
 
 static bool controllerRuntimeAuthorityActive() {
   return gRt.operatingMode == OperatingMode::Integrated && gRt.controlAuthority == ControlAuthority::Controller;
+}
+
+static bool localSetpointAdjustmentAllowed() {
+  if (localRuntimeAuthorityActive()) return true;
+
+  // When integrated but no controller-authored control profile exists on the
+  // device yet, keep local setpoint entry available.
+  return gRt.operatingMode == OperatingMode::Integrated &&
+         gCfg.profileCount == 0 &&
+         (gRt.runState == RunState::Idle || gRt.runState == RunState::Complete);
 }
 
 static void normalizePersistentConfig() {
@@ -384,6 +546,7 @@ static void normalizePersistentConfig() {
     gCfg.highAlarmC = tmp;
   }
   gCfg.alarmHysteresisC = constrain(gCfg.alarmHysteresisC, 0.1f, 10.0f);
+  syncLegacyAlarmFlags();
 }
 
 static void applyPersistentRuntimeSettings() {
@@ -391,7 +554,9 @@ static void applyPersistentRuntimeSettings() {
   gPid.setReverseActing(gCfg.pidDirection == PidDirection::Reverse);
   gHeater.setMaxOutputPercent(gCfg.maxOutputPercent);
   gRt.controlEnabled = gCfg.controlEnabled;
+  gRt.testingModeActive = testingModeActive();
   M5Dial.Display.setBrightness(gCfg.displayBrightness);
+  applyTestingModeOperatingOverride();
   syncControlAuthority();
 }
 
@@ -404,270 +569,175 @@ static void applyLocalAuthorityOverride(bool enabled) {
   syncControlAuthority();
 }
 
-static uint8_t settingsItemCount(SettingsSection section) {
-  switch (section) {
-    case SettingsSection::Status: return 10;
-    case SettingsSection::Control: return 10;
-    case SettingsSection::Pid: return 7;
-    case SettingsSection::Network: return 6;
-    case SettingsSection::Integration: return 5;
-    case SettingsSection::Device: return 7;
-    case SettingsSection::Exit: return 1;
-    default: return 1;
+static void formatMenuItemValue(MenuItemId id, MenuRenderItem& item, void*) {
+  item.value[0] = '\0';
+  switch (id) {
+    case MenuItemId::StatusOperatingMode:
+      strlcpy(item.value, gRt.operatingMode == OperatingMode::Integrated ? "Integrated" : "Standalone", sizeof(item.value));
+      break;
+    case MenuItemId::StatusAuthority:
+      strlcpy(item.value, controlAuthorityText(gRt.controlAuthority), sizeof(item.value));
+      break;
+    case MenuItemId::StatusSystemName:
+    case MenuItemId::IntegrationSystemName:
+      strlcpy(item.value, gRt.systemName[0] ? gRt.systemName : "Unbound", sizeof(item.value));
+      break;
+    case MenuItemId::StatusControllerLink:
+    case MenuItemId::IntegrationControllerLink:
+      strlcpy(item.value, gRt.controllerConnected ? "Connected" : "Offline", sizeof(item.value));
+      break;
+    case MenuItemId::StatusWifi:
+    case MenuItemId::NetworkWifiStatus:
+      strlcpy(item.value, gRt.wifiConnected ? WiFi.SSID().c_str() : "Disconnected", sizeof(item.value));
+      break;
+    case MenuItemId::StatusMqtt:
+      strlcpy(item.value, gRt.mqttConnected ? "Connected" : "Disconnected", sizeof(item.value));
+      break;
+    case MenuItemId::StatusProcessVariable:
+      snprintf(item.value, sizeof(item.value), "%.1f C", gRt.currentTempC);
+      break;
+    case MenuItemId::StatusOutput:
+      snprintf(item.value, sizeof(item.value), "%.0f %%", gRt.heaterOutputPct);
+      break;
+    case MenuItemId::StatusAlarm:
+      strlcpy(item.value, gRt.alarmText, sizeof(item.value));
+      break;
+    case MenuItemId::ControlLocalSetpoint:
+      snprintf(item.value, sizeof(item.value), "%.1f C", gCfg.localSetpointC);
+      break;
+    case MenuItemId::ControlEnable:
+      strlcpy(item.value, gCfg.controlEnabled ? "Enabled" : "Disabled", sizeof(item.value));
+      break;
+    case MenuItemId::ControlLocalOverride:
+      strlcpy(item.value,
+              gRt.operatingMode == OperatingMode::Integrated
+                  ? (gCfg.localAuthorityOverride ? "On" : "Off")
+                  : "N/A",
+              sizeof(item.value));
+      break;
+    case MenuItemId::ControlMinLimit:
+      snprintf(item.value, sizeof(item.value), "%.1f C", gCfg.minSetpointC);
+      break;
+    case MenuItemId::ControlMaxLimit:
+      snprintf(item.value, sizeof(item.value), "%.1f C", gCfg.maxSetpointC);
+      break;
+    case MenuItemId::ControlLowAlarm:
+      snprintf(item.value, sizeof(item.value), "%.1f C", gCfg.lowAlarmC);
+      break;
+    case MenuItemId::ControlHighAlarm:
+      snprintf(item.value, sizeof(item.value), "%.1f C", gCfg.highAlarmC);
+      break;
+    case MenuItemId::AlarmAll:
+      if (allAlarmTogglesEnabled()) strlcpy(item.value, "On", sizeof(item.value));
+      else if (allAlarmTogglesDisabled()) strlcpy(item.value, "Off [TEST]", sizeof(item.value));
+      else strlcpy(item.value, "Mixed", sizeof(item.value));
+      break;
+    case MenuItemId::AlarmSensorFault:
+      strlcpy(item.value, alarmToggleText(gCfg.alarmEnableSensorFault), sizeof(item.value));
+      break;
+    case MenuItemId::AlarmOverTemp:
+      strlcpy(item.value, alarmToggleText(gCfg.alarmEnableOverTemp), sizeof(item.value));
+      break;
+    case MenuItemId::AlarmHeatingIneffective:
+      strlcpy(item.value, alarmToggleText(gCfg.alarmEnableHeatingIneffective), sizeof(item.value));
+      break;
+    case MenuItemId::AlarmMqttOffline:
+      strlcpy(item.value, alarmToggleText(gCfg.alarmEnableMqttOffline), sizeof(item.value));
+      break;
+    case MenuItemId::AlarmLowProcessTemp:
+      strlcpy(item.value, alarmToggleText(gCfg.alarmEnableLowProcessTemp), sizeof(item.value));
+      break;
+    case MenuItemId::AlarmHighProcessTemp:
+      strlcpy(item.value, alarmToggleText(gCfg.alarmEnableHighProcessTemp), sizeof(item.value));
+      break;
+    case MenuItemId::AlarmLogEntry0:
+    case MenuItemId::AlarmLogEntry1:
+    case MenuItemId::AlarmLogEntry2:
+    case MenuItemId::AlarmLogEntry3:
+    case MenuItemId::AlarmLogEntry4:
+    case MenuItemId::AlarmLogEntry5:
+    case MenuItemId::AlarmLogEntry6:
+    case MenuItemId::AlarmLogEntry7: {
+      const uint8_t offset = alarmHistoryMenuOffset(id);
+      if (offset < gRt.alarmHistoryCount) {
+        const int newestIndex = static_cast<int>(gRt.alarmHistoryHead + CoreConfig::ALARM_HISTORY_CAPACITY - 1 - offset) %
+                                CoreConfig::ALARM_HISTORY_CAPACITY;
+        const AlarmHistoryEntry& entry = gRt.alarmHistory[newestIndex];
+        strlcpy(item.label, entry.text[0] ? entry.text : "Alarm Entry", sizeof(item.label));
+        formatMsTimestamp(entry.atMs, item.value, sizeof(item.value));
+      } else {
+        strlcpy(item.label, "--", sizeof(item.label));
+      }
+      break;
+    }
+    case MenuItemId::PidKp:
+      snprintf(item.value, sizeof(item.value), "%.2f", gCfg.pidKp);
+      break;
+    case MenuItemId::PidKi:
+      snprintf(item.value, sizeof(item.value), "%.3f", gCfg.pidKi);
+      break;
+    case MenuItemId::PidKd:
+      snprintf(item.value, sizeof(item.value), "%.2f", gCfg.pidKd);
+      break;
+    case MenuItemId::PidDirection:
+      strlcpy(item.value, gCfg.pidDirection == PidDirection::Reverse ? "Reverse" : "Direct", sizeof(item.value));
+      break;
+    case MenuItemId::PidOutputLimit:
+      snprintf(item.value, sizeof(item.value), "%.0f %%", gCfg.maxOutputPercent);
+      break;
+    case MenuItemId::PidAutotune:
+      if (gRt.runState == RunState::AutoTune) strlcpy(item.value, "Running", sizeof(item.value));
+      else if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) strlcpy(item.value, "Apply", sizeof(item.value));
+      else if (gRt.autoTunePhase == AutoTunePhase::Failed) strlcpy(item.value, "Retry", sizeof(item.value));
+      else strlcpy(item.value, "Start", sizeof(item.value));
+      break;
+    case MenuItemId::NetworkIpAddress:
+      strlcpy(item.value, gRt.wifiConnected ? WiFi.localIP().toString().c_str() : "--", sizeof(item.value));
+      break;
+    case MenuItemId::NetworkBrokerHost:
+      strlcpy(item.value, gBinding.brokerHost[0] ? gBinding.brokerHost : gCfg.mqttHost, sizeof(item.value));
+      break;
+    case MenuItemId::NetworkBrokerPort:
+      snprintf(item.value, sizeof(item.value), "%u", gBinding.brokerPort ? gBinding.brokerPort : gCfg.mqttPort);
+      break;
+    case MenuItemId::IntegrationControllerId:
+      strlcpy(item.value, gRt.controllerId[0] ? gRt.controllerId : "None", sizeof(item.value));
+      break;
+    case MenuItemId::DeviceBrightness:
+      snprintf(item.value, sizeof(item.value), "%u", gCfg.displayBrightness);
+      break;
+    case MenuItemId::DeviceBuzzer:
+      strlcpy(item.value, gCfg.buzzerEnabled ? "On" : "Off", sizeof(item.value));
+      break;
+    case MenuItemId::DeviceCalibrationOffset:
+      snprintf(item.value, sizeof(item.value), "%.2f C", gCfg.tempOffsetC);
+      break;
+    case MenuItemId::DeviceDeviceId:
+      strlcpy(item.value, gCfg.deviceId[0] ? gCfg.deviceId : "Unassigned", sizeof(item.value));
+      break;
+    case MenuItemId::DeviceFirmware:
+      strlcpy(item.value, CoreConfig::FIRMWARE_VERSION, sizeof(item.value));
+      break;
+    default:
+      break;
   }
 }
 
-static void refreshSettingsUiText() {
-  if (gRt.uiMode != UiMode::SettingsAdjust) {
-    gRt.settingsLabel[0] = '\0';
-    gRt.settingsValue[0] = '\0';
-    return;
-  }
-
-  if (gRt.settingsMenuLevel == SettingsMenuLevel::SectionList) {
-    strlcpy(gRt.settingsLabel, "SECTION", sizeof(gRt.settingsLabel));
-    strlcpy(gRt.settingsValue, settingsSectionText(gRt.settingsSection), sizeof(gRt.settingsValue));
-    return;
-  }
-
-  const uint8_t item = gRt.settingsItemIndex;
-  switch (gRt.settingsSection) {
-    case SettingsSection::Status:
-      switch (item) {
-        case 0:
-          strlcpy(gRt.settingsLabel, "OPERATING MODE", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.operatingMode == OperatingMode::Integrated ? "INTEGRATED" : "STANDALONE", sizeof(gRt.settingsValue));
-          break;
-        case 1:
-          strlcpy(gRt.settingsLabel, "AUTHORITY", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, controlAuthorityText(gRt.controlAuthority), sizeof(gRt.settingsValue));
-          break;
-        case 2:
-          strlcpy(gRt.settingsLabel, "SYSTEM NAME", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.systemName[0] ? gRt.systemName : "UNBOUND", sizeof(gRt.settingsValue));
-          break;
-        case 3:
-          strlcpy(gRt.settingsLabel, "CONTROLLER", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.controllerConnected ? "CONNECTED" : "OFFLINE", sizeof(gRt.settingsValue));
-          break;
-        case 4:
-          strlcpy(gRt.settingsLabel, "WI-FI", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.wifiConnected ? "CONNECTED" : "DISCONNECTED", sizeof(gRt.settingsValue));
-          break;
-        case 5:
-          strlcpy(gRt.settingsLabel, "MQTT", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.mqttConnected ? "CONNECTED" : "DISCONNECTED", sizeof(gRt.settingsValue));
-          break;
-        case 6:
-          strlcpy(gRt.settingsLabel, "PROCESS VAR", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.1f C", gRt.currentTempC);
-          break;
-        case 7:
-          strlcpy(gRt.settingsLabel, "OUTPUT", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.0f %%", gRt.heaterOutputPct);
-          break;
-        case 8:
-          strlcpy(gRt.settingsLabel, "ALARM", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.alarmText, sizeof(gRt.settingsValue));
-          break;
-        default:
-          strlcpy(gRt.settingsLabel, "BACK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-      }
-      break;
-
-    case SettingsSection::Control:
-      switch (item) {
-        case 0:
-          strlcpy(gRt.settingsLabel, "LOCAL SETPOINT", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.1f C", gCfg.localSetpointC);
-          break;
-        case 1:
-          strlcpy(gRt.settingsLabel, "CONTROL ENABLE", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gCfg.controlEnabled ? "ENABLED" : "DISABLED", sizeof(gRt.settingsValue));
-          break;
-        case 2:
-          strlcpy(gRt.settingsLabel, "TEMP STANDALONE", sizeof(gRt.settingsLabel));
-          if (gRt.operatingMode == OperatingMode::Integrated) strlcpy(gRt.settingsValue, gCfg.localAuthorityOverride ? "ON" : "OFF", sizeof(gRt.settingsValue));
-          else strlcpy(gRt.settingsValue, "N/A", sizeof(gRt.settingsValue));
-          break;
-        case 3:
-          strlcpy(gRt.settingsLabel, "MIN TEMP LIMIT", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.1f C", gCfg.minSetpointC);
-          break;
-        case 4:
-          strlcpy(gRt.settingsLabel, "MAX TEMP LIMIT", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.1f C", gCfg.maxSetpointC);
-          break;
-        case 5:
-          strlcpy(gRt.settingsLabel, "LOW ALARM", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.1f C", gCfg.lowAlarmC);
-          break;
-        case 6:
-          strlcpy(gRt.settingsLabel, "HIGH ALARM", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.1f C", gCfg.highAlarmC);
-          break;
-        case 7:
-          strlcpy(gRt.settingsLabel, "ALARMS ENABLED", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gCfg.tempAlarmEnabled ? "ON" : "OFF", sizeof(gRt.settingsValue));
-          break;
-        case 8:
-          strlcpy(gRt.settingsLabel, "STOP RUN", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-        default:
-          strlcpy(gRt.settingsLabel, "BACK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-      }
-      break;
-
-    case SettingsSection::Pid:
-      switch (item) {
-        case 0:
-          strlcpy(gRt.settingsLabel, "KP", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.2f", gCfg.pidKp);
-          break;
-        case 1:
-          strlcpy(gRt.settingsLabel, "KI", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.3f", gCfg.pidKi);
-          break;
-        case 2:
-          strlcpy(gRt.settingsLabel, "KD", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.2f", gCfg.pidKd);
-          break;
-        case 3:
-          strlcpy(gRt.settingsLabel, "DIRECTION", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gCfg.pidDirection == PidDirection::Reverse ? "REVERSE" : "DIRECT", sizeof(gRt.settingsValue));
-          break;
-        case 4:
-          strlcpy(gRt.settingsLabel, "OUTPUT LIMIT", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.0f %%", gCfg.maxOutputPercent);
-          break;
-        case 5:
-          strlcpy(gRt.settingsLabel, "AUTOTUNE", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "START", sizeof(gRt.settingsValue));
-          break;
-        default:
-          strlcpy(gRt.settingsLabel, "BACK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-      }
-      break;
-
-    case SettingsSection::Network:
-      switch (item) {
-        case 0:
-          strlcpy(gRt.settingsLabel, "WI-FI STATUS", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.wifiConnected ? WiFi.SSID().c_str() : "DISCONNECTED", sizeof(gRt.settingsValue));
-          break;
-        case 1:
-          strlcpy(gRt.settingsLabel, "IP ADDRESS", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.wifiConnected ? WiFi.localIP().toString().c_str() : "--", sizeof(gRt.settingsValue));
-          break;
-        case 2:
-          strlcpy(gRt.settingsLabel, "MQTT HOST", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gBinding.brokerHost[0] ? gBinding.brokerHost : gCfg.mqttHost, sizeof(gRt.settingsValue));
-          break;
-        case 3:
-          strlcpy(gRt.settingsLabel, "MQTT PORT", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%u", gBinding.brokerPort ? gBinding.brokerPort : gCfg.mqttPort);
-          break;
-        case 4:
-          strlcpy(gRt.settingsLabel, "CLEAR WI-FI", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-        default:
-          strlcpy(gRt.settingsLabel, "BACK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-      }
-      break;
-
-    case SettingsSection::Integration:
-      switch (item) {
-        case 0:
-          strlcpy(gRt.settingsLabel, "PAIRED SYSTEM", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.systemName[0] ? gRt.systemName : "UNBOUND", sizeof(gRt.settingsValue));
-          break;
-        case 1:
-          strlcpy(gRt.settingsLabel, "CONTROLLER ID", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.controllerId[0] ? gRt.controllerId : "NONE", sizeof(gRt.settingsValue));
-          break;
-        case 2:
-          strlcpy(gRt.settingsLabel, "CONTROLLER LINK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gRt.controllerConnected ? "CONNECTED" : "OFFLINE", sizeof(gRt.settingsValue));
-          break;
-        case 3:
-          strlcpy(gRt.settingsLabel, "UNPAIR", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-        default:
-          strlcpy(gRt.settingsLabel, "BACK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-      }
-      break;
-
-    case SettingsSection::Device:
-      switch (item) {
-        case 0:
-          strlcpy(gRt.settingsLabel, "BRIGHTNESS", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%u", gCfg.displayBrightness);
-          break;
-        case 1:
-          strlcpy(gRt.settingsLabel, "BUZZER", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gCfg.buzzerEnabled ? "ON" : "OFF", sizeof(gRt.settingsValue));
-          break;
-        case 2:
-          strlcpy(gRt.settingsLabel, "CAL OFFSET", sizeof(gRt.settingsLabel));
-          snprintf(gRt.settingsValue, sizeof(gRt.settingsValue), "%.2f C", gCfg.tempOffsetC);
-          break;
-        case 3:
-          strlcpy(gRt.settingsLabel, "DEVICE ID", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, gCfg.deviceId, sizeof(gRt.settingsValue));
-          break;
-        case 4:
-          strlcpy(gRt.settingsLabel, "FIRMWARE", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, CoreConfig::FIRMWARE_VERSION, sizeof(gRt.settingsValue));
-          break;
-        case 5:
-          strlcpy(gRt.settingsLabel, "RESET WI-FI", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-        default:
-          strlcpy(gRt.settingsLabel, "BACK", sizeof(gRt.settingsLabel));
-          strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-          break;
-      }
-      break;
-
-    case SettingsSection::Exit:
-    default:
-      strlcpy(gRt.settingsLabel, "EXIT", sizeof(gRt.settingsLabel));
-      strlcpy(gRt.settingsValue, "SELECT", sizeof(gRt.settingsValue));
-      break;
-  }
+static void rebuildMenuRenderState() {
+  if (gRt.uiMode == UiMode::SettingsAdjust) gMenu.buildRenderState(gMenuRenderState, formatMenuItemValue, nullptr);
 }
 
 static void enterSettingsMode() {
+  gMenu.reset();
   gRt.uiMode = UiMode::SettingsAdjust;
-  gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-  gRt.settingsSection = SettingsSection::Status;
-  gRt.settingsItemIndex = 0;
-  refreshSettingsUiText();
+  rebuildMenuRenderState();
 }
 
 static void leaveSettingsMode() {
+  gMenu.reset();
   if (gRt.runState == RunState::Running) gRt.uiMode = UiMode::Running;
   else if (gRt.runState == RunState::Paused) gRt.uiMode = UiMode::Paused;
   else gRt.uiMode = UiMode::SetpointAdjust;
-
-  gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-  gRt.settingsItemIndex = 0;
-  gRt.settingsLabel[0] = '\0';
-  gRt.settingsValue[0] = '\0';
 }
 
 static void logRuntimeEvent(const char* text) {
@@ -697,239 +767,190 @@ static void persistAndPublishConfig() {
   if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
 }
 
-static bool settingsItemIsEditable(SettingsSection section, uint8_t item) {
-  switch (section) {
-    case SettingsSection::Control:
-      return item <= 7;
-    case SettingsSection::Pid:
-      return item <= 4;
-    case SettingsSection::Device:
-      return item <= 2;
-    default:
-      return false;
-  }
-}
-
-static bool settingsItemIsAction(SettingsSection section, uint8_t item) {
-  switch (section) {
-    case SettingsSection::Control:
-      return item >= 8;
-    case SettingsSection::Pid:
-      return item >= 5;
-    case SettingsSection::Network:
-      return item >= 4;
-    case SettingsSection::Integration:
-      return item >= 3;
-    case SettingsSection::Device:
-      return item >= 5;
-    case SettingsSection::Exit:
-      return true;
-    default:
-      return item == settingsItemCount(section) - 1;
-  }
-}
-
-static void adjustCurrentSetting(int32_t diff) {
+static void adjustCurrentMenuValue(int32_t diff) {
   if (diff == 0) return;
 
   bool changed = false;
-  switch (gRt.settingsSection) {
-    case SettingsSection::Control:
-      switch (gRt.settingsItemIndex) {
-        case 0:
-          gCfg.localSetpointC = clampSetpointToLimits(gCfg.localSetpointC + diff * 0.5f);
-          gRt.currentSetpointC = gCfg.localSetpointC;
-          changed = true;
-          break;
-        case 1:
-          gCfg.controlEnabled = diff > 0;
-          changed = true;
-          break;
-        case 2:
-          if (gRt.operatingMode == OperatingMode::Integrated) {
-            applyLocalAuthorityOverride(diff > 0);
-            changed = true;
-          }
-          break;
-        case 3:
-          gCfg.minSetpointC = constrain(gCfg.minSetpointC + diff * 0.5f, 0.0f, 140.0f);
-          changed = true;
-          break;
-        case 4:
-          gCfg.maxSetpointC = constrain(gCfg.maxSetpointC + diff * 0.5f, 0.0f, 140.0f);
-          changed = true;
-          break;
-        case 5:
-          gCfg.lowAlarmC = constrain(gCfg.lowAlarmC + diff * 0.5f, -20.0f, 140.0f);
-          changed = true;
-          break;
-        case 6:
-          gCfg.highAlarmC = constrain(gCfg.highAlarmC + diff * 0.5f, -20.0f, 140.0f);
-          changed = true;
-          break;
-        case 7:
-          gCfg.tempAlarmEnabled = diff > 0;
-          changed = true;
-          break;
-        default:
-          break;
+  switch (gMenu.currentItem().id) {
+    case MenuItemId::ControlLocalSetpoint:
+      gCfg.localSetpointC = clampSetpointToLimits(gCfg.localSetpointC + diff * 0.5f);
+      gRt.currentSetpointC = gCfg.localSetpointC;
+      changed = true;
+      break;
+    case MenuItemId::ControlEnable:
+      gCfg.controlEnabled = diff > 0;
+      changed = true;
+      break;
+    case MenuItemId::ControlLocalOverride:
+      if (gRt.operatingMode == OperatingMode::Integrated) {
+        applyLocalAuthorityOverride(diff > 0);
+        changed = true;
       }
       break;
-
-    case SettingsSection::Pid:
-      switch (gRt.settingsItemIndex) {
-        case 0:
-          gCfg.pidKp = constrain(gCfg.pidKp + diff * 0.2f, 0.1f, 60.0f);
-          changed = true;
-          break;
-        case 1:
-          gCfg.pidKi = constrain(gCfg.pidKi + diff * 0.01f, 0.001f, 2.0f);
-          changed = true;
-          break;
-        case 2:
-          gCfg.pidKd = constrain(gCfg.pidKd + diff * 0.2f, 0.1f, 80.0f);
-          changed = true;
-          break;
-        case 3:
-          gCfg.pidDirection = (diff > 0) ? PidDirection::Reverse : PidDirection::Direct;
-          changed = true;
-          break;
-        case 4:
-          gCfg.maxOutputPercent = constrain(gCfg.maxOutputPercent + diff * 5.0f, 0.0f, 100.0f);
-          changed = true;
-          break;
-        default:
-          break;
+    case MenuItemId::ControlMinLimit:
+      gCfg.minSetpointC = constrain(gCfg.minSetpointC + diff * 0.5f, 0.0f, 140.0f);
+      changed = true;
+      break;
+    case MenuItemId::ControlMaxLimit:
+      gCfg.maxSetpointC = constrain(gCfg.maxSetpointC + diff * 0.5f, 0.0f, 140.0f);
+      changed = true;
+      break;
+    case MenuItemId::ControlLowAlarm:
+      gCfg.lowAlarmC = constrain(gCfg.lowAlarmC + diff * 0.5f, -20.0f, 140.0f);
+      changed = true;
+      break;
+    case MenuItemId::ControlHighAlarm:
+      gCfg.highAlarmC = constrain(gCfg.highAlarmC + diff * 0.5f, -20.0f, 140.0f);
+      changed = true;
+      break;
+    case MenuItemId::AlarmAll:
+      setAllAlarmToggles(diff > 0);
+      changed = true;
+      break;
+    case MenuItemId::AlarmSensorFault:
+    case MenuItemId::AlarmOverTemp:
+    case MenuItemId::AlarmHeatingIneffective:
+    case MenuItemId::AlarmMqttOffline:
+    case MenuItemId::AlarmLowProcessTemp:
+    case MenuItemId::AlarmHighProcessTemp: {
+      bool* flag = nullptr;
+      if (tryGetAlarmToggle(gMenu.currentItem().id, flag) && flag != nullptr) {
+        *flag = diff > 0;
+        syncLegacyAlarmFlags();
+        changed = true;
       }
       break;
-
-    case SettingsSection::Device:
-      switch (gRt.settingsItemIndex) {
-        case 0:
-          gCfg.displayBrightness = static_cast<uint8_t>(constrain(static_cast<int>(gCfg.displayBrightness) + static_cast<int>(diff * 8), 8, 255));
-          changed = true;
-          break;
-        case 1:
-          gCfg.buzzerEnabled = diff > 0;
-          changed = true;
-          break;
-        case 2:
-          gCfg.tempOffsetC = constrain(gCfg.tempOffsetC + diff * 0.1f, -10.0f, 10.0f);
-          gTempSensor.setCalibrationOffset(gCfg.tempOffsetC);
-          changed = true;
-          break;
-        default:
-          break;
-      }
+    }
+    case MenuItemId::PidKp:
+      gCfg.pidKp = constrain(gCfg.pidKp + diff * 0.2f, 0.1f, 60.0f);
+      changed = true;
       break;
-
+    case MenuItemId::PidKi:
+      gCfg.pidKi = constrain(gCfg.pidKi + diff * 0.01f, 0.001f, 2.0f);
+      changed = true;
+      break;
+    case MenuItemId::PidKd:
+      gCfg.pidKd = constrain(gCfg.pidKd + diff * 0.2f, 0.1f, 80.0f);
+      changed = true;
+      break;
+    case MenuItemId::PidDirection:
+      gCfg.pidDirection = (diff > 0) ? PidDirection::Reverse : PidDirection::Direct;
+      changed = true;
+      break;
+    case MenuItemId::PidOutputLimit:
+      gCfg.maxOutputPercent = constrain(gCfg.maxOutputPercent + diff * 5.0f, 0.0f, 100.0f);
+      changed = true;
+      break;
+    case MenuItemId::DeviceBrightness:
+      gCfg.displayBrightness = static_cast<uint8_t>(constrain(static_cast<int>(gCfg.displayBrightness) + static_cast<int>(diff * 8), 8, 255));
+      changed = true;
+      break;
+    case MenuItemId::DeviceBuzzer:
+      gCfg.buzzerEnabled = diff > 0;
+      changed = true;
+      break;
+    case MenuItemId::DeviceCalibrationOffset:
+      gCfg.tempOffsetC = constrain(gCfg.tempOffsetC + diff * 0.1f, -10.0f, 10.0f);
+      gTempSensor.setCalibrationOffset(gCfg.tempOffsetC);
+      changed = true;
+      break;
     default:
       break;
   }
 
-  if (changed) {
-    applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
-    persistAndPublishConfig();
+  if (!changed) return;
+
+  if (gRt.activeAlarm != AlarmCode::None && !isAlarmEnabled(gRt.activeAlarm)) {
+    gAlarm.clearAlarm(AlarmControlSource::System);
+    syncAlarmFromManager();
+  }
+
+  applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
+  persistAndPublishConfig();
+  rebuildMenuRenderState();
+}
+
+static void triggerMenuAction(MenuItemId id) {
+  switch (id) {
+    case MenuItemId::ControlStopRun:
+      gStages.stop();
+      gCompletionHandled = false;
+      logRuntimeEvent("Run stopped (menu)");
+      break;
+    case MenuItemId::PidAutotune:
+      if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
+        gRt.previousKp = gCfg.pidKp;
+        gRt.previousKi = gCfg.pidKi;
+        gRt.previousKd = gCfg.pidKd;
+        persistActivePidAndQuality();
+        gRt.autoTunePhase = AutoTunePhase::Complete;
+        gRt.uiMode = UiMode::SetpointAdjust;
+        logRuntimeEvent("Autotune accepted (menu)");
+        if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
+      } else {
+        startAutoTune();
+      }
+      break;
+    case MenuItemId::NetworkClearWifi:
+    case MenuItemId::DeviceResetWifi:
+      gWifi.resetSettings();
+      logRuntimeEvent("Wi-Fi reset (menu)");
+      break;
+    case MenuItemId::IntegrationUnpair:
+      gIntegration.unpairToStandalone(true);
+      gBinding = gIntegration.binding();
+      applyLocalAuthorityOverride(false);
+      logRuntimeEvent("Device unpaired");
+      leaveSettingsMode();
+      break;
+    case MenuItemId::AlarmLogClearAll:
+      clearAlarmHistory();
+      logRuntimeEvent("Alarm log cleared");
+      break;
+    default:
+      break;
   }
 }
 
-static void activateCurrentSettingsSelection() {
-  if (gRt.settingsMenuLevel == SettingsMenuLevel::SectionList) {
-    if (gRt.settingsSection == SettingsSection::Exit) {
+static void activateCurrentMenuSelection() {
+  const MenuItemDefinition& item = gMenu.currentItem();
+
+  if (gMenu.isEditing()) {
+    gMenu.setEditing(false);
+    rebuildMenuRenderState();
+    return;
+  }
+
+  switch (item.kind) {
+    case MenuItemKind::Submenu:
+      gMenu.enter(item.target);
+      break;
+    case MenuItemKind::Back:
+      if (!gMenu.back()) leaveSettingsMode();
+      break;
+    case MenuItemKind::Exit:
       leaveSettingsMode();
-    } else {
-      gRt.settingsMenuLevel = SettingsMenuLevel::ItemList;
-      gRt.settingsItemIndex = 0;
-    }
-    refreshSettingsUiText();
-    return;
+      break;
+    case MenuItemKind::Action:
+      triggerMenuAction(item.id);
+      break;
+    case MenuItemKind::Value:
+      gMenu.setEditing(true);
+      break;
+    case MenuItemKind::ReadOnly:
+    default:
+      playUiTone(1800, 25);
+      break;
   }
 
-  if (gRt.settingsMenuLevel == SettingsMenuLevel::EditValue) {
-    gRt.settingsMenuLevel = SettingsMenuLevel::ItemList;
-    refreshSettingsUiText();
-    return;
-  }
-
-  if (settingsItemIsAction(gRt.settingsSection, gRt.settingsItemIndex)) {
-    switch (gRt.settingsSection) {
-      case SettingsSection::Status:
-        gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-        gRt.settingsItemIndex = 0;
-        break;
-      case SettingsSection::Control:
-        if (gRt.settingsItemIndex == 8) {
-          gStages.stop();
-          gCompletionHandled = false;
-          logRuntimeEvent("Run stopped (menu)");
-        } else {
-          gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-          gRt.settingsItemIndex = 0;
-        }
-        break;
-      case SettingsSection::Pid:
-        if (gRt.settingsItemIndex == 5) {
-          if (gRt.operatingMode == OperatingMode::Integrated && !gCfg.localAuthorityOverride) {
-            applyLocalAuthorityOverride(true);
-            logRuntimeEvent("Local override enabled for autotune");
-            persistAndPublishConfig();
-          }
-          startAutoTune();
-          logRuntimeEvent("Autotune started (menu)");
-        } else {
-          gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-          gRt.settingsItemIndex = 0;
-        }
-        break;
-      case SettingsSection::Network:
-        if (gRt.settingsItemIndex == 4) {
-          gWifi.resetSettings();
-          logRuntimeEvent("WiFi reset (menu)");
-        } else {
-          gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-          gRt.settingsItemIndex = 0;
-        }
-        break;
-      case SettingsSection::Integration:
-        if (gRt.settingsItemIndex == 3) {
-          gIntegration.unpairToStandalone(true);
-          gBinding = gIntegration.binding();
-          applyLocalAuthorityOverride(false);
-          logRuntimeEvent("Device unpaired");
-        } else {
-          gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-          gRt.settingsItemIndex = 0;
-        }
-        break;
-      case SettingsSection::Device:
-        if (gRt.settingsItemIndex == 5) {
-          gWifi.resetSettings();
-          logRuntimeEvent("WiFi reset (device menu)");
-        } else {
-          gRt.settingsMenuLevel = SettingsMenuLevel::SectionList;
-          gRt.settingsItemIndex = 0;
-        }
-        break;
-      case SettingsSection::Exit:
-      default:
-        leaveSettingsMode();
-        break;
-    }
-    refreshSettingsUiText();
-    return;
-  }
-
-  if (settingsItemIsEditable(gRt.settingsSection, gRt.settingsItemIndex)) {
-    gRt.settingsMenuLevel = SettingsMenuLevel::EditValue;
-    refreshSettingsUiText();
-  }
+  rebuildMenuRenderState();
 }
 
 static void debugPrintBootNetworkTargets() {
   String ssidStr = WiFi.SSID();
   const char* ssid = (ssidStr.length() > 0) ? ssidStr.c_str() : "<not-associated-yet>";
-  const char* mqttHost = (gBinding.brokerHost[0] != '\0') ? gBinding.brokerHost : gCfg.mqttHost;
-  const uint16_t mqttPort = (gBinding.brokerPort != 0) ? gBinding.brokerPort : gCfg.mqttPort;
+  const char* mqttHost = TestingMode::mqttHost(gCfg);
+  const uint16_t mqttPort = TestingMode::mqttPort(gCfg);
 
   IPAddress mqttIp;
   bool resolved = false;
@@ -937,101 +958,22 @@ static void debugPrintBootNetworkTargets() {
     resolved = WiFi.hostByName(mqttHost, mqttIp);
   }
 
-  DBG_PRINTF("Boot network target mode=%s SSID=%s\n",
+  DBG_PRINTF("Boot network target mode=%s SSID=%s test=%d\n",
              gRt.operatingMode == OperatingMode::Integrated ? "integrated" : "standalone",
-             ssid);
+             ssid,
+             gRt.testingModeActive);
   if (resolved) {
     DBG_PRINTF("Boot MQTT target host=%s resolved_ip=%s port=%u tls=%d\n",
                mqttHost,
                mqttIp.toString().c_str(),
                mqttPort,
-               gCfg.mqttUseTls);
+               TestingMode::mqttTlsEnabled(gCfg));
   } else {
     DBG_PRINTF("Boot MQTT target host=%s resolved_ip=<unresolved> port=%u tls=%d\n",
                mqttHost,
                mqttPort,
-               gCfg.mqttUseTls);
+               TestingMode::mqttTlsEnabled(gCfg));
   }
-}
-
-static void showBootInfoScreen(uint32_t durationMs = 30000) {
-  String ssid = WiFi.SSID();
-  if (ssid.length() == 0) ssid = "<not-associated>";
-  const char* mqttHost = (gBinding.brokerHost[0] != '\0') ? gBinding.brokerHost : gCfg.mqttHost;
-  const uint16_t mqttPort = (gBinding.brokerPort != 0) ? gBinding.brokerPort : gCfg.mqttPort;
-
-  IPAddress mqttIp;
-  const bool mqttResolved = (mqttHost[0] != '\0') && WiFi.hostByName(mqttHost, mqttIp);
-  const String mqttIpText = mqttResolved ? mqttIp.toString() : String("<unresolved>");
-  const String mqttTopicBase = gMqtt.topicBase();
-
-  auto& d = M5Dial.Display;
-  d.fillScreen(BLACK);
-  d.setTextColor(WHITE, BLACK);
-  d.setTextDatum(top_left);
-  d.setFont(&fonts::Font2);
-  d.drawString("Environment Controller", 8, 8);
-
-  d.setTextColor(GOLD, BLACK);
-  d.drawString(String("FW: ") + CoreConfig::FIRMWARE_VERSION, 8, 34);
-
-  d.setTextColor(CYAN, BLACK);
-  d.drawString(String("Mode: ") + (gRt.operatingMode == OperatingMode::Integrated ? "integrated" : "standalone"), 8, 56);
-  d.drawString(String("SSID: ") + ssid, 8, 80);
-
-  d.setTextColor(WHITE, BLACK);
-  d.drawString(String("MQTT Host: ") + mqttHost, 8, 104);
-  d.drawString(String("MQTT IP: ") + mqttIpText, 8, 128);
-  d.drawString(String("Port/TLS: ") + String(mqttPort) + (gCfg.mqttUseTls ? " / on" : " / off"), 8, 152);
-  d.drawString(String("Client ID: ") + gMqtt.clientId(), 8, 176);
-  d.drawString(String("Topic Base: ") + mqttTopicBase, 8, 200);
-
-  d.setTextColor(0xBDF7, BLACK);
-  d.drawString("Press button to continue...", 8, 224);
-
-  const uint32_t started = millis();
-  while (millis() - started < durationMs) {
-    M5Dial.update();
-    if (M5Dial.BtnA.wasClicked()) break;
-    delay(20);
-  }
-}
-
-static bool shouldRunUnpairResetOnBootHold(uint32_t promptWindowMs = 4000, uint32_t holdThresholdMs = 1200) {
-  auto& d = M5Dial.Display;
-  d.fillScreen(BLACK);
-  d.setTextColor(ORANGE, BLACK);
-  d.setTextDatum(top_left);
-  d.setFont(&fonts::Font2);
-  d.drawString("Hold button to unpair/reset", 8, 88);
-  d.setTextColor(WHITE, BLACK);
-  d.drawString("Clears integrated binding", 8, 112);
-  d.drawString("and WiFi credentials", 8, 136);
-
-  const uint32_t started = millis();
-  uint32_t pressedAt = 0;
-  bool pressed = false;
-  while (millis() - started < promptWindowMs) {
-    M5Dial.update();
-    if (M5Dial.BtnA.wasPressed()) {
-      pressed = true;
-      pressedAt = millis();
-    }
-    if (M5Dial.BtnA.wasReleased()) {
-      pressed = false;
-      pressedAt = 0;
-    }
-    if (M5Dial.BtnA.wasHold()) {
-      playUiTone(2600, 80);
-      return true;
-    }
-    if (pressed && pressedAt != 0 && millis() - pressedAt >= holdThresholdMs) {
-      playUiTone(2600, 80);
-      return true;
-    }
-    delay(20);
-  }
-  return false;
 }
 
 static bool upsertProfileFromJson(const JsonDocument& doc, uint8_t* outIndex = nullptr) {
@@ -1166,19 +1108,24 @@ void handleTouch() {
 void handleButton() {
   if (M5Dial.BtnA.wasClicked()) {
     DBG_PRINTLN("Button clicked");
-    if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
+    if (gRt.uiMode == UiMode::AutoTuneComplete || gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
       gRt.previousKp = gCfg.pidKp;
       gRt.previousKi = gCfg.pidKi;
       gRt.previousKd = gCfg.pidKd;
       persistActivePidAndQuality();
       gRt.autoTunePhase = AutoTunePhase::Complete;
+      gRt.uiMode = UiMode::SetpointAdjust;
       logRuntimeEvent("Autotune accepted (local)");
       if (gRt.mqttConnected) gMqtt.publishConfig(gCfg, gRt);
       gDisplay.invalidateAll();
       return;
     }
+    if (gRt.runState == RunState::AutoTune || gRt.uiMode == UiMode::AutoTuneIntro || gRt.uiMode == UiMode::AutoTuneActive) {
+      playUiTone(1800, 25);
+      return;
+    }
     if (gRt.uiMode == UiMode::SettingsAdjust) {
-      activateCurrentSettingsSelection();
+      activateCurrentMenuSelection();
       gDisplay.invalidateAll();
       return;
     }
@@ -1210,9 +1157,13 @@ void handleButton() {
   }
 
   if (M5Dial.BtnA.wasHold()) {
+    if (gRt.runState == RunState::AutoTune || gRt.uiMode == UiMode::AutoTuneIntro || gRt.uiMode == UiMode::AutoTuneActive) {
+      return;
+    }
     if (gRt.autoTunePhase == AutoTunePhase::PendingAccept) {
       applyTunings(gCfg.pidKp, gCfg.pidKi, gCfg.pidKd);
       gRt.autoTunePhase = AutoTunePhase::Failed;
+      gRt.uiMode = UiMode::SetpointAdjust;
       gRt.autoTuneQualityScore = 0.0f;
       logRuntimeEvent("Autotune rejected (local)");
       gDisplay.invalidateAll();
@@ -1223,9 +1174,9 @@ void handleButton() {
     if (gRt.uiMode != UiMode::SettingsAdjust) {
       enterSettingsMode();
       logRuntimeEvent("Settings opened");
+      gDisplay.invalidateAll();
+      playUiTone(2200, 80);
     }
-    gDisplay.invalidateAll();
-    playUiTone(2200, 80);
   }
 }
 
@@ -1233,18 +1184,21 @@ void processInput() {
   M5Dial.update();
   handleTouch();
 
+  if ((gRt.runState == RunState::AutoTune || gRt.uiMode == UiMode::AutoTuneIntro || gRt.uiMode == UiMode::AutoTuneActive) &&
+      M5Dial.BtnA.pressedFor(kAutoTuneExitHoldMs)) {
+    failAutoTuneAndRevert();
+    logRuntimeEvent("Autotune canceled by hold");
+    gDisplay.invalidateAll();
+    playUiTone(1800, 120);
+    return;
+  }
+
   if (gRt.activeAlarm != AlarmCode::None && gDisplay.wasAlarmPillTouched()) {
     DBG_PRINTLN("Display alarm-pill reset");
     gAlarm.clearAlarm(AlarmControlSource::LocalUi);
     syncAlarmFromManager();
     gDisplay.invalidateAll();
     playUiTone(3200, 20);
-  }
-
-  if (gDisplay.wasSettingsTouched() && gRt.runState != RunState::Running && gRt.runState != RunState::Paused) {
-    if (gRt.uiMode == UiMode::SettingsAdjust) leaveSettingsMode();
-    else enterSettingsMode();
-    gDisplay.invalidateAll();
   }
 
   handleButton();
@@ -1255,7 +1209,7 @@ void processInput() {
   if (diff == 0) return;
   lastEnc = enc;
 
-  if (gRt.uiMode == UiMode::SetpointAdjust && localRuntimeAuthorityActive()) {
+  if (gRt.uiMode == UiMode::SetpointAdjust && localSetpointAdjustmentAllowed()) {
     gRt.controlMode = ControlMode::Local;
     gCfg.localSetpointC = clampSetpointToLimits(gCfg.localSetpointC + diff * 0.5f);
     gRt.currentSetpointC = gCfg.localSetpointC;
@@ -1272,22 +1226,8 @@ void processInput() {
       DBG_PRINTF("Encoder minutes diff=%ld minutes=%lu\n", (long)diff, (unsigned long)gCfg.manualStageMinutes);
     }
   } else if (gRt.uiMode == UiMode::SettingsAdjust) {
-    if (gRt.settingsMenuLevel == SettingsMenuLevel::SectionList) {
-      int nextSection = static_cast<int>(gRt.settingsSection) + (diff > 0 ? 1 : -1);
-      while (nextSection < static_cast<int>(SettingsSection::Status)) nextSection += 7;
-      while (nextSection > static_cast<int>(SettingsSection::Exit)) nextSection -= 7;
-      gRt.settingsSection = static_cast<SettingsSection>(nextSection);
-      gRt.settingsItemIndex = 0;
-    } else if (gRt.settingsMenuLevel == SettingsMenuLevel::ItemList) {
-      int nextItem = static_cast<int>(gRt.settingsItemIndex) + (diff > 0 ? 1 : -1);
-      const int count = settingsItemCount(gRt.settingsSection);
-      while (nextItem < 0) nextItem += count;
-      while (nextItem >= count) nextItem -= count;
-      gRt.settingsItemIndex = static_cast<uint8_t>(nextItem);
-    } else {
-      adjustCurrentSetting(diff);
-    }
-    refreshSettingsUiText();
+    if (gMenu.isEditing()) adjustCurrentMenuValue(diff);
+    else if (gMenu.navigate(diff)) rebuildMenuRenderState();
   } else if (gDebugVerboseInput) {
     DBG_PRINTF("Encoder diff=%ld ignored ui=%u\n", (long)diff, (unsigned)gRt.uiMode);
   }
@@ -1299,12 +1239,12 @@ static void updateTemperatureAlertState() {
   gRt.lowTempAlarmActive = false;
   gRt.highTempAlarmActive = false;
 
-  if (!gCfg.tempAlarmEnabled || !gRt.sensorHealthy || isnan(gRt.currentTempC)) return;
+  if (!gRt.sensorHealthy || isnan(gRt.currentTempC)) return;
 
-  if (gRt.currentTempC <= gCfg.lowAlarmC) {
+  if (gCfg.alarmEnableLowProcessTemp && gRt.currentTempC <= gCfg.lowAlarmC) {
     gRt.lowTempAlarmActive = true;
   }
-  if (gRt.currentTempC >= gCfg.highAlarmC) {
+  if (gCfg.alarmEnableHighProcessTemp && gRt.currentTempC >= gCfg.highAlarmC) {
     gRt.highTempAlarmActive = true;
   }
 }
@@ -1313,20 +1253,18 @@ void updateSafety() {
   gRt.sensorHealthy = gTempSensor.isHealthy();
   if (!gRt.sensorHealthy) {
     DBG_PRINTLN("Alarm: Sensor fault");
-    gAlarm.setAlarm(AlarmCode::SensorFault, alarmText(AlarmCode::SensorFault));
-    logRuntimeEvent("Alarm: Sensor fault");
+    raiseAlarm(AlarmCode::SensorFault, "Alarm: Sensor fault");
     gRt.runState = RunState::Fault;
   } else if (gRt.currentTempC >= gCfg.overTempC) {
     DBG_PRINTLN("Alarm: Over temp");
-    gAlarm.setAlarm(AlarmCode::OverTemp, alarmText(AlarmCode::OverTemp));
-    logRuntimeEvent("Alarm: Over temp");
+    raiseAlarm(AlarmCode::OverTemp, "Alarm: Over temp");
     gRt.runState = RunState::Fault;
   } else {
     updateTemperatureAlertState();
-    if (gCfg.tempAlarmEnabled && gRt.lowTempAlarmActive) {
-      gAlarm.setAlarm(AlarmCode::LowProcessTemp, alarmText(AlarmCode::LowProcessTemp), false);
-    } else if (gCfg.tempAlarmEnabled && gRt.highTempAlarmActive) {
-      gAlarm.setAlarm(AlarmCode::HighProcessTemp, alarmText(AlarmCode::HighProcessTemp), false);
+    if (gRt.lowTempAlarmActive) {
+      raiseAlarm(AlarmCode::LowProcessTemp, "Alarm: Low process temp", false);
+    } else if (gRt.highTempAlarmActive) {
+      raiseAlarm(AlarmCode::HighProcessTemp, "Alarm: High process temp", false);
     } else if ((gAlarm.getAlarm() == AlarmCode::LowProcessTemp || gAlarm.getAlarm() == AlarmCode::HighProcessTemp) &&
                gRt.currentTempC > (gCfg.lowAlarmC + gCfg.alarmHysteresisC) &&
                gRt.currentTempC < (gCfg.highAlarmC - gCfg.alarmHysteresisC)) {
@@ -1347,8 +1285,7 @@ void updateSafety() {
     } else if (millis() - gHeatEvalWindowStart >= Config::TEMP_RISE_EVAL_MS) {
       if (gRt.currentTempC < gHeatEvalStartTemp + Config::MIN_EXPECTED_RISE_C) {
         DBG_PRINTLN("Alarm: Heating ineffective");
-        gAlarm.setAlarm(AlarmCode::HeatingIneffective, alarmText(AlarmCode::HeatingIneffective));
-        logRuntimeEvent("Alarm: Heating ineffective");
+        raiseAlarm(AlarmCode::HeatingIneffective, "Alarm: Heating ineffective");
         gRt.runState = RunState::Fault;
       }
       gHeatEvalWindowStart = millis();
@@ -1416,13 +1353,12 @@ void updateControl() {
 }
 
 void setup() {
-  DBG_BEGIN(115200);
-  delay(50);
-  debugLogBanner();
-
   auto cfg = M5.config();
   M5Dial.begin(cfg, true, false);
   M5Dial.Display.setRotation(0);
+  initDebugTransport();
+  delay(50);
+  debugLogBanner();
 
   gStorage.begin();
   gStorage.load(gCfg);
@@ -1470,21 +1406,22 @@ void setup() {
   gAlarm.setLocalUiAlarmControlEnabled(true);
   gStages.begin(&gCfg, &gRt);
   applyPersistentRuntimeSettings();
+  Serial.printf("[TEST] enabled=%d ssid=%s mqtt=%s:%u tls=%d alarms_forced_off=%d\n",
+                gRt.testingModeActive,
+                TestingMode::wifiSsid(),
+                TestingMode::mqttHost(gCfg),
+                TestingMode::mqttPort(gCfg),
+                TestingMode::mqttTlsEnabled(gCfg),
+                TestingMode::alarmsForcedOff(gCfg));
 
   if (!debugWifiDisabledEffective()) {
-    if (shouldRunUnpairResetOnBootHold()) {
-      DBG_LOGLN("Boot button hold detected: unpair/reset");
-      gIntegration.unpairToStandalone(true);
-      logRuntimeEvent("Integrated binding cleared (boot hold)");
-      M5Dial.Display.fillScreen(BLACK);
-      M5Dial.Display.setTextColor(RED, BLACK);
-      M5Dial.Display.setTextDatum(top_left);
-      M5Dial.Display.setFont(&fonts::Font2);
-      M5Dial.Display.drawString("Standalone reset complete", 8, 92);
-      M5Dial.Display.drawString("Opening local setup...", 8, 116);
-      delay(600);
-    }
-    if (gIntegration.shouldBootIntegratedNetworking()) {
+    if (gRt.testingModeActive) {
+      Serial.printf("[BOOT] testing mode forcing network ssid=%s broker=%s:%u\n",
+                    TestingMode::wifiSsid(),
+                    TestingMode::mqttHost(gCfg),
+                    TestingMode::mqttPort(gCfg));
+      gWifi.beginIntegrated(TestingMode::wifiSsid(), TestingMode::wifiPassword());
+    } else if (gIntegration.shouldBootIntegratedNetworking()) {
       Serial.printf("[BOOT] starting integrated network ssid=%s broker=%s:%u\n",
                     gIntegration.bootSsid(),
                     gIntegration.bootBrokerHost(),
@@ -1496,9 +1433,9 @@ void setup() {
       gWifi.beginStandalone(gCfg.wifiPortalTimeoutSec);
     }
     debugPrintBootNetworkTargets();
-    DBG_PRINTF("WiFi begin done mqttHost=%s mqttPort=%u timeout=%u\n",
-               gBinding.brokerHost[0] != '\0' ? gBinding.brokerHost : gCfg.mqttHost,
-               gBinding.brokerPort != 0 ? gBinding.brokerPort : gCfg.mqttPort,
+    DBG_PRINTF("WiFi startup queued mqttHost=%s mqttPort=%u timeout=%u\n",
+               TestingMode::mqttHost(gCfg),
+               TestingMode::mqttPort(gCfg),
                static_cast<unsigned>(gCfg.wifiPortalTimeoutSec));
     DBG_PRINTF("WiFi commissioning AP: %s (pass=%s)\n",
                gWifi.getPortalApName(),
@@ -1512,12 +1449,18 @@ void setup() {
   if (!debugMqttDisabledEffective()) {
     gMqtt.begin(&gCfg, &gRt);
     gMqtt.setCommandCallback(handleCommands);
+    Serial.printf("[MQTT] startup target host=%s port=%u tls=%d auth=%d clientId=%s literal_ip=%d\n",
+                  TestingMode::mqttHost(gCfg),
+                  TestingMode::mqttPort(gCfg),
+                  TestingMode::mqttTlsEnabled(gCfg),
+                  TestingMode::mqttUseAuth(gCfg),
+                  gMqtt.clientId(),
+                  gRt.testingModeActive);
   } else {
     DBG_LOGLN("MQTT disabled by debug/compile-time network mode");
     gRt.mqttConnected = false;
   }
 
-  showBootInfoScreen();
   gDisplay.begin();
   gDisplay.invalidateAll();
   logRuntimeEvent("System booted");
@@ -1592,15 +1535,23 @@ void loop() {
   }
 
   gIntegration.update();
+  applyTestingModeOperatingOverride();
   syncControlAuthority();
 
-  if (remoteCommsTimedOut(now) && gAlarm.getAlarm() != AlarmCode::MqttOffline) {
-    gAlarm.setAlarm(AlarmCode::MqttOffline, alarmText(AlarmCode::MqttOffline));
-    applyMqttTimeoutFallback();
-    logRuntimeEvent("Alarm: MQTT offline timeout");
-    syncAlarmFromManager();
-    gPendingAlarmStatusPublish = true;
+  if (gRt.uiMode == UiMode::AutoTuneIntro &&
+      millis() - gRt.autoTuneUiStateAtMs >= kAutoTuneIntroScreenMs) {
+    gRt.uiMode = UiMode::AutoTuneActive;
     gDisplay.invalidateAll();
+  }
+
+  if (remoteCommsTimedOut(now) && gAlarm.getAlarm() != AlarmCode::MqttOffline) {
+    if (isAlarmEnabled(AlarmCode::MqttOffline)) {
+      raiseAlarm(AlarmCode::MqttOffline, "Alarm: MQTT offline timeout");
+      applyMqttTimeoutFallback();
+      syncAlarmFromManager();
+      gPendingAlarmStatusPublish = true;
+      gDisplay.invalidateAll();
+    }
   }
 
   updateSafety();
@@ -1656,6 +1607,7 @@ void loop() {
     debugPrintState("loop");
   }
 
-  gDisplay.draw(gCfg, gRt, stage, remaining);
+  if (gRt.uiMode == UiMode::SettingsAdjust) rebuildMenuRenderState();
+  gDisplay.draw(gCfg, gRt, stage, remaining, gRt.uiMode == UiMode::SettingsAdjust ? &gMenuRenderState : nullptr);
   delay(1);
 }

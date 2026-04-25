@@ -1,6 +1,7 @@
 #include "MqttManager.h"
 #include "core/CoreConfig.h"
 #include "DebugControl.h"
+#include "TestingMode.h"
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <functional>
@@ -17,6 +18,14 @@ constexpr char kMqttLifecycleTopic[] = "/lifecycle";
 constexpr char kMqttEnrollmentRequestTopic[] = "/enrollment/request";
 constexpr char kMqttEnrollmentResponseTopic[] = "/enrollment/response";
 constexpr char kMqttControllerHeartbeatTopic[] = "/controller/heartbeat";
+constexpr uint16_t kMqttClientBufferSize = 4096;
+
+void logPublishFailure(const char* topicLeaf, size_t payloadLen) {
+  Serial.printf("[MQTT] publish failed topic=%s payload_len=%u buffer=%u\n",
+                topicLeaf ? topicLeaf : "<null>",
+                static_cast<unsigned>(payloadLen),
+                static_cast<unsigned>(kMqttClientBufferSize));
+}
 
 const char* runStateText(RunState runState) {
   switch (runState) {
@@ -36,9 +45,9 @@ void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
   _rt = rt;
   buildClientId();
   _transportClient = &_wifiClient;
-  _client.setBufferSize(1024);
+  _client.setBufferSize(kMqttClientBufferSize);
   configureClientForSecurity(true);
-  _client.setServer(_brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : cfg->mqttHost, effectivePort());
+  applyBrokerEndpoint();
   _client.setCallback([this](char* topic, byte* payload, unsigned int length) {
     this->handleMessage(topic, payload, length);
   });
@@ -74,7 +83,7 @@ void MqttManager::update() {
   if (!_cfg || !_rt) return;
 
   configureClientForSecurity();
-  _client.setServer(_brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost, effectivePort());
+  applyBrokerEndpoint();
 
   if (!_rt->wifiConnected) {
     _rt->mqttConnected = false;
@@ -98,34 +107,52 @@ void MqttManager::tryReconnect() {
   _lastReconnectMs = millis();
 
   bool ok = false;
-  if (strlen(_cfg->mqttUser) > 0) {
+  if (TestingMode::mqttUseAuth(*_cfg)) {
     ok = _client.connect(_clientId, _cfg->mqttUser, _cfg->mqttPass);
   } else {
     ok = _client.connect(_clientId);
   }
 
   if (ok) {
-    const char* host = _brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost;
-    DBG_LOGF("MQTT connected (%s:%u tls=%d)\n", host, effectivePort(), _cfg->mqttUseTls);
-    Serial.printf("[MQTT] connected host=%s port=%u tls=%d\n", host, effectivePort(), _cfg->mqttUseTls);
+    const char* host = currentBrokerHost();
+    DBG_LOGF("MQTT connected host=%s port=%u tls=%d test=%d auth=%d clientId=%s literal_ip=%d\n",
+             host,
+             effectivePort(),
+             TestingMode::mqttTlsEnabled(*_cfg),
+             TestingMode::enabled(*_cfg),
+             TestingMode::mqttUseAuth(*_cfg),
+             _clientId,
+             usingLiteralBrokerIp());
+    Serial.printf("[MQTT] connected host=%s port=%u tls=%d test=%d auth=%d clientId=%s literal_ip=%d\n",
+                  host,
+                  effectivePort(),
+                  TestingMode::mqttTlsEnabled(*_cfg),
+                  TestingMode::enabled(*_cfg),
+                  TestingMode::mqttUseAuth(*_cfg),
+                  _clientId,
+                  usingLiteralBrokerIp());
     subscribeTopics();
     _rt->lastValidMqttConnectionAtMs = millis();
   } else {
-    const char* host = _brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost;
-    DBG_LOGF("MQTT reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
+    const char* host = currentBrokerHost();
+    DBG_LOGF("MQTT reconnect failed state=%d host=%s port=%u tls=%d wifi=%d auth=%d clientId=%s literal_ip=%d\n",
              _client.state(),
              host,
              effectivePort(),
-             _cfg->mqttUseTls,
+             TestingMode::mqttTlsEnabled(*_cfg),
              _rt ? _rt->wifiConnected : false,
-             strlen(_cfg->mqttUser) > 0);
-    Serial.printf("[MQTT] reconnect failed state=%d host=%s port=%u tls=%d wifi=%d user=%d\n",
+             TestingMode::mqttUseAuth(*_cfg),
+             _clientId,
+             usingLiteralBrokerIp());
+    Serial.printf("[MQTT] reconnect failed state=%d host=%s port=%u tls=%d wifi=%d auth=%d clientId=%s literal_ip=%d\n",
                   _client.state(),
                   host,
                   effectivePort(),
-                  _cfg->mqttUseTls,
+                  TestingMode::mqttTlsEnabled(*_cfg),
                   _rt ? _rt->wifiConnected : false,
-                  strlen(_cfg->mqttUser) > 0);
+                  TestingMode::mqttUseAuth(*_cfg),
+                  _clientId,
+                  usingLiteralBrokerIp());
   }
 }
 
@@ -172,6 +199,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["controller_enrollment_pending"] = rt.controllerEnrollmentPending;
   doc["controller_connected"] = rt.controllerConnected;
   doc["integrated_fallback_active"] = rt.integratedFallbackActive;
+  doc["testingModeEnabled"] = rt.testingModeActive;
   doc["control_authority"] =
       (rt.controlAuthority == ControlAuthority::Controller) ? "controller"
       : (rt.controlAuthority == ControlAuthority::LocalOverride) ? "local_override"
@@ -218,7 +246,9 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   serializeJson(doc, out);
 
   String topic = topicFor(kMqttStatusTopic);
-  _client.publish(topic.c_str(), out.c_str(), true);
+  if (!_client.publish(topic.c_str(), out.c_str(), true)) {
+    logPublishFailure(kMqttStatusTopic, out.length());
+  }
   publishShadow(rt, remainingSec);
 }
 
@@ -242,7 +272,9 @@ void MqttManager::publishShadow(const RuntimeState& rt, uint32_t remainingSec) {
   serializeJson(doc, out);
 
   String topic = topicFor(kMqttShadowTopic);
-  _client.publish(topic.c_str(), out.c_str(), true);
+  if (!_client.publish(topic.c_str(), out.c_str(), true)) {
+    logPublishFailure(kMqttShadowTopic, out.length());
+  }
 }
 
 void MqttManager::publishCommandAck(const char* cmdId,
@@ -298,7 +330,9 @@ void MqttManager::publishCalibrationStatus(const PersistentConfig& cfg, const Ru
   serializeJson(doc, out);
 
   String topic = topicFor(kMqttCalibrationTopic);
-  _client.publish(topic.c_str(), out.c_str(), true);
+  if (!_client.publish(topic.c_str(), out.c_str(), true)) {
+    logPublishFailure(kMqttCalibrationTopic, out.length());
+  }
 }
 
 void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
@@ -309,7 +343,9 @@ void MqttManager::publishProfileCompleteIfPending(RuntimeState& rt) {
   String out;
   serializeJson(doc, out);
   String topic = topicFor(kMqttLifecycleTopic);
-  _client.publish(topic.c_str(), out.c_str(), true);
+  if (!_client.publish(topic.c_str(), out.c_str(), true)) {
+    logPublishFailure(kMqttLifecycleTopic, out.length());
+  }
   rt.pendingProfileCompletePublish = false;
 }
 
@@ -332,6 +368,7 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
       : (rt.controlAuthority == ControlAuthority::LocalOverride) ? "local_override"
       : "local";
   doc["controlEnabled"] = cfg.controlEnabled;
+  doc["testingModeEnabled"] = rt.testingModeActive;
   doc["localAuthorityOverride"] = cfg.localAuthorityOverride;
   doc["systemName"] = rt.systemName;
   doc["controllerId"] = rt.controllerId;
@@ -344,9 +381,15 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["lowAlarmC"] = cfg.lowAlarmC;
   doc["highAlarmC"] = cfg.highAlarmC;
   doc["alarmHysteresisC"] = cfg.alarmHysteresisC;
-  doc["mqttHost"] = cfg.mqttHost;
-  doc["mqttPort"] = cfg.mqttPort;
-  doc["mqttUseTls"] = cfg.mqttUseTls;
+  doc["alarmEnableSensorFault"] = cfg.alarmEnableSensorFault;
+  doc["alarmEnableOverTemp"] = cfg.alarmEnableOverTemp;
+  doc["alarmEnableHeatingIneffective"] = cfg.alarmEnableHeatingIneffective;
+  doc["alarmEnableMqttOffline"] = cfg.alarmEnableMqttOffline;
+  doc["alarmEnableLowProcessTemp"] = cfg.alarmEnableLowProcessTemp;
+  doc["alarmEnableHighProcessTemp"] = cfg.alarmEnableHighProcessTemp;
+  doc["mqttHost"] = TestingMode::mqttHost(cfg);
+  doc["mqttPort"] = effectivePort();
+  doc["mqttUseTls"] = TestingMode::mqttTlsEnabled(cfg);
   doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
   doc["mqttFallbackMode"] = static_cast<uint8_t>(cfg.mqttFallbackMode);
   doc["wifiPortalTimeoutSec"] = cfg.wifiPortalTimeoutSec;
@@ -369,7 +412,9 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   serializeJson(doc, out);
 
   String topic = topicFor(kMqttConfigTopic);
-  _client.publish(topic.c_str(), out.c_str(), true);
+  if (!_client.publish(topic.c_str(), out.c_str(), true)) {
+    logPublishFailure(kMqttConfigTopic, out.length());
+  }
 }
 
 void MqttManager::publishEventLog(const RuntimeState& rt) {
@@ -391,7 +436,9 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
   String out;
   serializeJson(doc, out);
   String topic = topicFor(kMqttEventsTopic);
-  _client.publish(topic.c_str(), out.c_str(), false);
+  if (!_client.publish(topic.c_str(), out.c_str(), false)) {
+    logPublishFailure(kMqttEventsTopic, out.length());
+  }
 }
 
 bool MqttManager::isConnected() {
@@ -414,17 +461,37 @@ void MqttManager::clearBrokerOverride() {
   _brokerOverridePort = 0;
 }
 
+void MqttManager::applyBrokerEndpoint() {
+  if (!_cfg) return;
+  if (usingLiteralBrokerIp()) {
+    _client.setServer(TestingMode::mqttIp(), effectivePort());
+  } else {
+    _client.setServer(currentBrokerHost(), effectivePort());
+  }
+}
+
+const char* MqttManager::currentBrokerHost() const {
+  if (!_cfg) return TestingMode::MQTT_HOST;
+  if (TestingMode::enabled(*_cfg)) return TestingMode::MQTT_HOST;
+  return _brokerOverrideHost[0] != '\0' ? _brokerOverrideHost : _cfg->mqttHost;
+}
+
+bool MqttManager::usingLiteralBrokerIp() const {
+  return _cfg && TestingMode::enabled(*_cfg);
+}
+
 uint16_t MqttManager::effectivePort() const {
   if (!_cfg) return CoreConfig::MQTT_PORT_PLAIN;
+  if (TestingMode::enabled(*_cfg)) return TestingMode::MQTT_PORT;
   uint16_t port = _brokerOverridePort != 0 ? _brokerOverridePort : _cfg->mqttPort;
-  if (_cfg->mqttUseTls && port == CoreConfig::MQTT_PORT_PLAIN) return CoreConfig::MQTT_PORT_TLS;
+  if (TestingMode::mqttTlsEnabled(*_cfg) && port == CoreConfig::MQTT_PORT_PLAIN) return CoreConfig::MQTT_PORT_TLS;
   return port;
 }
 
 void MqttManager::configureClientForSecurity(bool force) {
   if (!_cfg) return;
 
-  const bool tlsEnabled = _cfg->mqttUseTls;
+  const bool tlsEnabled = TestingMode::mqttTlsEnabled(*_cfg);
   const uint16_t desiredPort = effectivePort();
   if (!force && tlsEnabled == _lastTlsEnabled && desiredPort == _lastPort) return;
 
