@@ -62,6 +62,7 @@ public:
   void startPairingWindow(uint32_t durationMs = CoreConfig::PAIRING_WINDOW_MS);
   bool injectDevelopmentCard(const char* json, char* reason, size_t reasonSize);
   void unpairToStandalone(bool clearWifiSettings);
+  void clearStoredNetworking();
   bool shouldBootIntegratedNetworking() const;
   const char* bootSsid() const;
   const char* bootPassword() const;

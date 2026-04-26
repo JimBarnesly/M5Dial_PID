@@ -4,6 +4,8 @@
 #include <esp_wifi_types.h>
 
 namespace {
+constexpr uint32_t kReconnectIntervalMs = 10000;
+
 const char* wifiDisconnectReasonText(uint8_t reason) {
   switch (reason) {
     case WIFI_REASON_UNSPECIFIED: return "unspecified";
@@ -48,8 +50,9 @@ void WifiManagerWrapper::transitionTo(State next) {
   switch (_state) {
     case State::Idle: label = "idle"; break;
     case State::Connecting: label = "connecting"; break;
-    case State::PortalActive: label = "portal_active"; break;
     case State::Connected: label = "connected"; break;
+    case State::RetryBackoff: label = "retry_backoff"; break;
+    case State::Unavailable: label = "unavailable"; break;
   }
   Serial.printf("[WiFi] state=%s integrated=%d\n", label, _integratedMode);
 }
@@ -80,19 +83,10 @@ void WifiManagerWrapper::ensureEventLogging() {
         Serial.printf("[WiFi] disconnected reason=%u (%s) ssid=%s integrated=%d\n",
                       reason,
                       wifiDisconnectReasonText(reason),
-                      _integratedMode ? _managedSsid : WiFi.SSID().c_str(),
+                      hasManagedCredentials() ? _managedSsid : WiFi.SSID().c_str(),
                       _integratedMode);
-
-        if (!_integratedMode && reason == WIFI_REASON_AUTH_EXPIRE) {
-          const uint32_t now = millis();
-          if (_lastAuthExpireMs == 0 || now - _lastAuthExpireMs > 15000) _authExpireCount = 1;
-          else if (_authExpireCount < 255) ++_authExpireCount;
-          _lastAuthExpireMs = now;
-
-          if (_authExpireCount >= 3) _portalForced = false;
-        }
-
-        if (_state == State::Connected) transitionTo(State::Connecting);
+        if (hasManagedCredentials()) transitionTo(State::RetryBackoff);
+        else transitionTo(State::Unavailable);
         break;
       }
 
@@ -104,87 +98,64 @@ void WifiManagerWrapper::ensureEventLogging() {
   _eventLoggingInstalled = true;
 }
 
-bool WifiManagerWrapper::hasSavedCredentials() const {
-  return WiFi.SSID().length() > 0;
+bool WifiManagerWrapper::hasManagedCredentials() const {
+  return _managedSsid[0] != '\0';
 }
 
-void WifiManagerWrapper::startBackgroundPortal() {
-  if (_portalForced) return;
+void WifiManagerWrapper::restartStaAndConnect(const char* ssid, const char* password) {
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
 
-  Serial.printf("[WiFi] starting background portal ap=%s timeout=%u\n", _apName, _portalTimeoutSec);
-  _wm.startConfigPortal(_apName, _apPass);
-  _portalForced = true;
-  transitionTo(State::PortalActive);
+  WiFi.disconnect(true, true);
+  delay(500);
+
+  WiFi.mode(WIFI_OFF);
+  delay(500);
+
+  WiFi.mode(WIFI_STA);
+  delay(250);
+
+  _lastReconnectAttemptMs = millis();
+  Serial.printf("[WiFi] begin ssid=%s integrated=%d\n", ssid ? ssid : "", _integratedMode);
+  WiFi.begin(ssid, password);
 }
 
-void WifiManagerWrapper::buildPortalCredentials() {
-  uint64_t efuseMac = ESP.getEfuseMac();
-  uint32_t suffix = static_cast<uint32_t>(efuseMac & 0xFFFFFFULL);
-  snprintf(_apName, sizeof(_apName), "%s%06lX", CoreConfig::WIFI_AP_NAME_PREFIX, static_cast<unsigned long>(suffix));
-  snprintf(_apPass,
-           sizeof(_apPass),
-           "%s%06lX!",
-           CoreConfig::WIFI_AP_PASS_PREFIX,
-           static_cast<unsigned long>(suffix));
-}
-
-void WifiManagerWrapper::beginStandalone(uint16_t portalTimeoutSec) {
-  buildPortalCredentials();
+void WifiManagerWrapper::beginStandalone() {
   ensureEventLogging();
   _integratedMode = false;
   _managedSsid[0] = '\0';
   _managedPass[0] = '\0';
-  _portalTimeoutSec = portalTimeoutSec;
-
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);
-  WiFi.persistent(true);
-
-  _wm.setDebugOutput(true);
-  _wm.setConnectRetries(8);
-  _wm.setConfigPortalBlocking(false);
-  _wm.setConfigPortalTimeout(portalTimeoutSec);
-
-  _portalForced = false;
-  _authExpireCount = 0;
-  _lastAuthExpireMs = 0;
-  _lastReconnectAttemptMs = millis();
-  transitionTo(State::Idle);
-
-  if (hasSavedCredentials()) {
-    Serial.printf("[WiFi] attempting saved credentials SSID=%s\n", WiFi.SSID().c_str());
-    WiFi.begin();
-    transitionTo(State::Connecting);
-  } else {
-    Serial.println("[WiFi] no saved credentials; portal deferred to background update");
-  }
-
+  _lastReconnectAttemptMs = 0;
+  _connectAllowedAtMs = 0;
+  WiFi.persistent(false);
+  WiFi.disconnect(true, true);
+  delay(120);
+  WiFi.mode(WIFI_OFF);
+  transitionTo(State::Unavailable);
+  Serial.println("[WiFi] no explicit network credentials; remaining local-only");
   _started = true;
 }
 
 void WifiManagerWrapper::beginIntegrated(const char* ssid, const char* password) {
-  buildPortalCredentials();
   ensureEventLogging();
   _integratedMode = true;
   strlcpy(_managedSsid, ssid ? ssid : "", sizeof(_managedSsid));
   strlcpy(_managedPass, password ? password : "", sizeof(_managedPass));
+  _lastReconnectAttemptMs = 0;
+  _connectAllowedAtMs = millis() + CoreConfig::WIFI_BOOT_CONNECT_DELAY_MS;
 
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);
-  WiFi.persistent(false);
-
-  _portalForced = false;
-  _authExpireCount = 0;
-  _lastAuthExpireMs = 0;
-  _lastReconnectAttemptMs = millis();
-  transitionTo(State::Connecting);
-
-  Serial.printf("[WiFi] integrated connect SSID=%s\n", _managedSsid);
-  WiFi.disconnect(false, false);
-  delay(100);
-  WiFi.begin(_managedSsid, _managedPass);
+  if (!hasManagedCredentials()) {
+    transitionTo(State::Unavailable);
+    Serial.println("[WiFi] integrated network requested without credentials");
+  } else {
+    transitionTo(State::RetryBackoff);
+    Serial.printf("[WiFi] delaying initial connect ssid=%s integrated=%d delay_ms=%lu\n",
+                  _managedSsid,
+                  _integratedMode,
+                  static_cast<unsigned long>(CoreConfig::WIFI_BOOT_CONNECT_DELAY_MS));
+  }
   _started = true;
 }
 
@@ -193,46 +164,24 @@ void WifiManagerWrapper::update() {
 
   if (WiFi.status() == WL_CONNECTED) {
     transitionTo(State::Connected);
-  } else if (_state == State::Connected) {
+    return;
+  }
+
+  if (!hasManagedCredentials()) {
+    transitionTo(State::Unavailable);
+    return;
+  }
+
+  if (_state == State::Connected) transitionTo(State::RetryBackoff);
+  if (_state == State::Idle) transitionTo(State::RetryBackoff);
+
+  const uint32_t now = millis();
+  if (_lastReconnectAttemptMs == 0 && now < _connectAllowedAtMs) return;
+
+  if (_lastReconnectAttemptMs == 0 || now - _lastReconnectAttemptMs >= kReconnectIntervalMs) {
+    Serial.printf("[WiFi] reconnect attempt ssid=%s integrated=%d\n", _managedSsid, _integratedMode);
+    restartStaAndConnect(_managedSsid, _managedPass);
     transitionTo(State::Connecting);
-  }
-
-  if (_integratedMode) {
-    if (WiFi.status() != WL_CONNECTED && millis() - _lastReconnectAttemptMs > 10000) {
-      _lastReconnectAttemptMs = millis();
-      Serial.printf("[WiFi] reconnect attempt integrated SSID=%s\n", _managedSsid);
-      WiFi.disconnect(false, false);
-      delay(50);
-      WiFi.begin(_managedSsid, _managedPass);
-      transitionTo(State::Connecting);
-    }
-    return;
-  }
-
-  _wm.process();
-  if (WiFi.status() == WL_CONNECTED) return;
-
-  if (_authExpireCount >= 6 && !_portalForced) {
-    Serial.println("[WiFi] repeated AUTH_EXPIRE; clearing settings and starting portal");
-    resetSettings();
-    _authExpireCount = 0;
-    startBackgroundPortal();
-    return;
-  }
-
-  if (!_portalForced) {
-    if (hasSavedCredentials()) {
-      if (millis() - _lastReconnectAttemptMs > 10000) {
-        _lastReconnectAttemptMs = millis();
-        Serial.println("[WiFi] reconnect attempt using saved credentials");
-        WiFi.disconnect(false, false);
-        delay(50);
-        WiFi.begin();
-        transitionTo(State::Connecting);
-      }
-    } else {
-      startBackgroundPortal();
-    }
   }
 }
 
@@ -240,24 +189,16 @@ bool WifiManagerWrapper::isConnected() const {
   return WiFi.status() == WL_CONNECTED;
 }
 
-const char* WifiManagerWrapper::getPortalApName() const {
-  return _apName;
-}
-
-const char* WifiManagerWrapper::getPortalApPassword() const {
-  return _apPass;
-}
-
 void WifiManagerWrapper::resetSettings() {
-  _wm.resetSettings();
   _managedSsid[0] = '\0';
   _managedPass[0] = '\0';
   _integratedMode = false;
-  _portalForced = false;
+  _lastReconnectAttemptMs = 0;
+  _connectAllowedAtMs = 0;
   WiFi.disconnect(true, true);
   delay(120);
   WiFi.mode(WIFI_OFF);
   delay(120);
-  WiFi.mode(WIFI_STA);
-  transitionTo(State::Idle);
+  transitionTo(State::Unavailable);
+  Serial.println("[WiFi] explicit network credentials cleared");
 }

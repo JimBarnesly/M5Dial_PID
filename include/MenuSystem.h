@@ -4,14 +4,14 @@
 
 enum class MenuScreenId : uint8_t {
   Root = 0,
-  Status,
   Control,
   Alarm,
   AlarmLog,
   PidSettings,
   Network,
   Integration,
-  Device
+  Device,
+  Diagnostics
 };
 
 enum class MenuItemKind : uint8_t {
@@ -26,25 +26,14 @@ enum class MenuItemKind : uint8_t {
 enum class MenuItemId : uint16_t {
   None = 0,
 
-  RootStatus,
   RootControl,
   RootAlarm,
   RootPidSettings,
   RootNetwork,
   RootIntegration,
   RootDevice,
+  RootDiagnostics,
   RootExit,
-
-  StatusOperatingMode,
-  StatusAuthority,
-  StatusSystemName,
-  StatusControllerLink,
-  StatusWifi,
-  StatusMqtt,
-  StatusProcessVariable,
-  StatusOutput,
-  StatusAlarm,
-  StatusBack,
 
   ControlLocalSetpoint,
   ControlEnable,
@@ -53,7 +42,6 @@ enum class MenuItemId : uint16_t {
   ControlMaxLimit,
   ControlLowAlarm,
   ControlHighAlarm,
-  ControlAlarmsEnabled,
   ControlStopRun,
   ControlBack,
 
@@ -104,8 +92,15 @@ enum class MenuItemId : uint16_t {
   DeviceCalibrationOffset,
   DeviceDeviceId,
   DeviceFirmware,
-  DeviceResetWifi,
-  DeviceBack
+  DeviceBack,
+
+  DiagnosticsAuthority,
+  DiagnosticsController,
+  DiagnosticsProbeA,
+  DiagnosticsProbeB,
+  DiagnosticsPidLive,
+  DiagnosticsHeat,
+  DiagnosticsBack
 };
 
 struct MenuItemDefinition {

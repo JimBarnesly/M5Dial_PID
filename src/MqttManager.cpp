@@ -38,6 +38,99 @@ const char* runStateText(RunState runState) {
     default: return "unknown";
   }
 }
+
+const char* alarmKey(AlarmCode code) {
+  switch (code) {
+    case AlarmCode::SensorFault: return "sensor_fault";
+    case AlarmCode::OverTemp: return "over_temp";
+    case AlarmCode::HeatingIneffective: return "heating_ineffective";
+    case AlarmCode::MqttOffline: return "mqtt_offline";
+    case AlarmCode::LowProcessTemp: return "low_process_temp";
+    case AlarmCode::HighProcessTemp: return "high_process_temp";
+    case AlarmCode::None:
+    default:
+      return "none";
+  }
+}
+
+const char* alarmSeverityText(AlarmCode code) {
+  switch (code) {
+    case AlarmCode::SensorFault:
+    case AlarmCode::OverTemp:
+      return "critical";
+    case AlarmCode::HeatingIneffective:
+    case AlarmCode::MqttOffline:
+      return "warning";
+    case AlarmCode::LowProcessTemp:
+    case AlarmCode::HighProcessTemp:
+      return "advisory";
+    case AlarmCode::None:
+    default:
+      return "none";
+  }
+}
+
+bool alarmIsLatched(AlarmCode code) {
+  switch (code) {
+    case AlarmCode::SensorFault:
+    case AlarmCode::OverTemp:
+    case AlarmCode::HeatingIneffective:
+      return true;
+    case AlarmCode::MqttOffline:
+    case AlarmCode::LowProcessTemp:
+    case AlarmCode::HighProcessTemp:
+    case AlarmCode::None:
+    default:
+      return false;
+  }
+}
+
+bool alarmEnabledForCode(const PersistentConfig& cfg, AlarmCode code) {
+  switch (code) {
+    case AlarmCode::SensorFault: return cfg.alarmEnableSensorFault;
+    case AlarmCode::OverTemp: return cfg.alarmEnableOverTemp;
+    case AlarmCode::HeatingIneffective: return cfg.alarmEnableHeatingIneffective;
+    case AlarmCode::MqttOffline: return cfg.alarmEnableMqttOffline;
+    case AlarmCode::LowProcessTemp: return cfg.alarmEnableLowProcessTemp;
+    case AlarmCode::HighProcessTemp: return cfg.alarmEnableHighProcessTemp;
+    case AlarmCode::None:
+    default:
+      return false;
+  }
+}
+
+bool alarmActiveForCode(const RuntimeState& rt, AlarmCode code) {
+  switch (code) {
+    case AlarmCode::LowProcessTemp: return rt.lowTempAlarmActive;
+    case AlarmCode::HighProcessTemp: return rt.highTempAlarmActive;
+    case AlarmCode::SensorFault:
+    case AlarmCode::OverTemp:
+    case AlarmCode::HeatingIneffective:
+    case AlarmCode::MqttOffline:
+      return rt.activeAlarm == code;
+    case AlarmCode::None:
+    default:
+      return false;
+  }
+}
+
+bool alarmAckedForCode(const RuntimeState& rt, AlarmCode code) {
+  return rt.activeAlarm == code && rt.alarmAcknowledged;
+}
+
+void appendAlarmState(JsonObject parent,
+                      const PersistentConfig& cfg,
+                      const RuntimeState& rt,
+                      AlarmCode code,
+                      bool inhibited) {
+  JsonObject item = parent[alarmKey(code)].to<JsonObject>();
+  item["enabled"] = alarmEnabledForCode(cfg, code);
+  item["active"] = alarmActiveForCode(rt, code);
+  item["acknowledged"] = alarmAckedForCode(rt, code);
+  item["latched"] = alarmIsLatched(code);
+  item["severity"] = alarmSeverityText(code);
+  item["inhibited"] = inhibited;
+}
 }
 
 void MqttManager::begin(PersistentConfig* cfg, RuntimeState* rt) {
@@ -192,6 +285,10 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   else doc["probe_b_temp"] = nullptr;
   doc["probe_a_ok"] = rt.probeAHealthy;
   doc["probe_b_ok"] = rt.probeBHealthy;
+  doc["probe_a_plausible"] = rt.probeAPlausible;
+  doc["probe_b_plausible"] = rt.probeBPlausible;
+  doc["probe_a_last_good_age_ms"] = rt.lastProbeAValidAtMs == 0 ? nullptr : millis() - rt.lastProbeAValidAtMs;
+  doc["probe_b_last_good_age_ms"] = rt.lastProbeBValidAtMs == 0 ? nullptr : millis() - rt.lastProbeBValidAtMs;
   doc["feed_forward_enabled"] = rt.feedForwardEnabled;
   doc["operating_mode"] = (rt.operatingMode == OperatingMode::Integrated) ? "integrated" : "standalone";
   doc["integration_state"] = static_cast<uint8_t>(rt.integrationState);
@@ -199,6 +296,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["controller_enrollment_pending"] = rt.controllerEnrollmentPending;
   doc["controller_connected"] = rt.controllerConnected;
   doc["integrated_fallback_active"] = rt.integratedFallbackActive;
+  doc["controller_fallback_cause"] = rt.controllerFallbackCause;
   doc["testingModeEnabled"] = rt.testingModeActive;
   doc["control_authority"] =
       (rt.controlAuthority == ControlAuthority::Controller) ? "controller"
@@ -226,6 +324,7 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["prevPidKd"] = rt.previousKd;
   doc["sensorHealthy"] = rt.sensorHealthy;
   doc["tempPlausible"] = rt.tempPlausible;
+  doc["sensorCalibrationSane"] = rt.sensorCalibrationSane;
   doc["low_temp_alarm_active"] = rt.lowTempAlarmActive;
   doc["high_temp_alarm_active"] = rt.highTempAlarmActive;
   doc["wifiConnected"] = rt.wifiConnected;
@@ -238,8 +337,25 @@ void MqttManager::publishStatus(const RuntimeState& rt, const char* activeStageN
   doc["alarmCode"] = static_cast<uint8_t>(rt.activeAlarm);
   doc["alarmAcknowledged"] = rt.alarmAcknowledged;
   doc["alarmText"] = rt.alarmText;
+  doc["lastStartBlockReason"] = rt.lastStartBlockReason;
+  doc["lastSetpointClampReason"] = rt.lastSetpointClampReason;
+  doc["heatOnContinuousSec"] = rt.heatOnContinuousSinceMs == 0 ? 0UL : (millis() - rt.heatOnContinuousSinceMs) / 1000UL;
   doc["activeStage"] = activeStageName ? activeStageName : "";
   doc["remainingSec"] = remainingSec;
+  JsonObject alarmStates = doc["alarms"].to<JsonObject>();
+  appendAlarmState(alarmStates, *_cfg, rt, AlarmCode::SensorFault, false);
+  appendAlarmState(alarmStates, *_cfg, rt, AlarmCode::OverTemp, false);
+  appendAlarmState(alarmStates, *_cfg, rt, AlarmCode::HeatingIneffective,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs ||
+                       millis() < rt.autotuneAlarmInhibitUntilMs);
+  appendAlarmState(alarmStates, *_cfg, rt, AlarmCode::MqttOffline,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs);
+  appendAlarmState(alarmStates, *_cfg, rt, AlarmCode::LowProcessTemp,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs ||
+                       millis() < rt.autotuneAlarmInhibitUntilMs);
+  appendAlarmState(alarmStates, *_cfg, rt, AlarmCode::HighProcessTemp,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs ||
+                       millis() < rt.autotuneAlarmInhibitUntilMs);
   doc["_type"] = "status";
 
   String out;
@@ -392,7 +508,9 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["mqttUseTls"] = TestingMode::mqttTlsEnabled(cfg);
   doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
   doc["mqttFallbackMode"] = static_cast<uint8_t>(cfg.mqttFallbackMode);
-  doc["wifiPortalTimeoutSec"] = cfg.wifiPortalTimeoutSec;
+  doc["controllerLossGraceSec"] = cfg.controllerLossGraceSec;
+  doc["warmupTimeoutMinutes"] = cfg.warmupTimeoutMinutes;
+  doc["maxContinuousHeatMinutes"] = cfg.maxContinuousHeatMinutes;
   doc["profileCount"] = cfg.profileCount;
   doc["activeProfileIndex"] = cfg.activeProfileIndex;
   doc["pidKp"] = cfg.pidKp;
@@ -406,6 +524,20 @@ void MqttManager::publishConfig(const PersistentConfig& cfg, const RuntimeState&
   doc["autoTuneQualityScore"] = cfg.tuneQualityScore;
   doc["displayBrightness"] = cfg.displayBrightness;
   doc["buzzerEnabled"] = cfg.buzzerEnabled;
+  JsonObject alarmStates = doc["alarms"].to<JsonObject>();
+  appendAlarmState(alarmStates, cfg, rt, AlarmCode::SensorFault, false);
+  appendAlarmState(alarmStates, cfg, rt, AlarmCode::OverTemp, false);
+  appendAlarmState(alarmStates, cfg, rt, AlarmCode::HeatingIneffective,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs ||
+                       millis() < rt.autotuneAlarmInhibitUntilMs);
+  appendAlarmState(alarmStates, cfg, rt, AlarmCode::MqttOffline,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs);
+  appendAlarmState(alarmStates, cfg, rt, AlarmCode::LowProcessTemp,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs ||
+                       millis() < rt.autotuneAlarmInhibitUntilMs);
+  appendAlarmState(alarmStates, cfg, rt, AlarmCode::HighProcessTemp,
+                   millis() < rt.startupAlarmInhibitUntilMs || millis() < rt.reconnectAlarmInhibitUntilMs ||
+                       millis() < rt.autotuneAlarmInhibitUntilMs);
   doc["_type"] = "config_effective";
 
   String out;
@@ -438,6 +570,23 @@ void MqttManager::publishEventLog(const RuntimeState& rt) {
   String topic = topicFor(kMqttEventsTopic);
   if (!_client.publish(topic.c_str(), out.c_str(), false)) {
     logPublishFailure(kMqttEventsTopic, out.length());
+  }
+}
+
+void MqttManager::publishLifecycleEvent(const char* type, const char* detail, const char* cause) {
+  if (!_client.connected()) return;
+
+  JsonDocument doc;
+  doc["_type"] = type ? type : "lifecycle";
+  if (detail && detail[0] != '\0') doc["detail"] = detail;
+  if (cause && cause[0] != '\0') doc["cause"] = cause;
+  doc["atMs"] = millis();
+
+  String out;
+  serializeJson(doc, out);
+  String topic = topicFor(kMqttLifecycleTopic);
+  if (!_client.publish(topic.c_str(), out.c_str(), false)) {
+    logPublishFailure(kMqttLifecycleTopic, out.length());
   }
 }
 

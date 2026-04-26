@@ -37,7 +37,7 @@ A pragmatic path is to preserve the existing local-control loop, then progressiv
   - `src/StorageManager.cpp` stores `PersistentConfig` JSON in Preferences namespace `env-ctrl` key `cfg`.
   - Includes conditional persistence of secrets based on flash encryption availability.
 - **Networking / provisioning**
-  - `src/WifiManagerWrapper.cpp` handles WiFiManager portal + saved credential persistence (`wifi-cred`) and forced network attempts.
+  - `src/WifiManagerWrapper.cpp` handles explicit STA credential-driven connection attempts and reconnect behavior.
 - **MQTT transport**
   - `src/MqttManager.cpp` manages reconnect, subscriptions, status/ack/config/event publishing, TLS transport selection.
 - **Control logic**
@@ -131,12 +131,11 @@ A pragmatic path is to preserve the existing local-control loop, then progressiv
 ## 8. Persistence/state-management findings
 
 - Preferences namespaces:
-  - `env-ctrl` for full JSON config,
-  - `wifi-cred` for SSID/pass.
+  - `env-ctrl` for full JSON config and integration binding data.
 - Boot restore uses defaults + JSON overlay + profile parsing.
 - Secret persistence is disabled when flash encryption is unavailable (good security posture, but can surprise operators if not surfaced clearly in UI/API).
 - `mqttHost` forced migration behavior is the largest persistence correctness issue.
-- Potential stale-behavior confusion source: mixed storage ownership (WiFiManager + custom Wi-Fi prefs + config JSON) plus forced reconnect path can make runtime behavior diverge from visible config assumptions.
+- Potential stale-behavior confusion source has been reduced by removing the legacy WiFiManager credential path in favor of explicit bootstrap/testing credentials.
 
 ## 9. Refactor roadmap
 

@@ -235,19 +235,6 @@ Fallback mode values:
 - `1` = pause
 - `2` = stop heater
 
-`wifi_portal_timeout`
-
-```json
-{
-  "command": "wifi_portal_timeout",
-  "seconds": 180
-}
-```
-
-Range:
-
-- `30` to `1800`
-
 `reset_wifi`
 
 ```json
@@ -743,7 +730,6 @@ Config snapshot payload:
   "mqttUseTls": false,
   "mqttCommsTimeoutSec": 30,
   "mqttFallbackMode": 0,
-  "wifiPortalTimeoutSec": 180,
   "profileCount": 0,
   "activeProfileIndex": 0,
   "pidKp": 18.0,

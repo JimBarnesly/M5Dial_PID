@@ -14,7 +14,6 @@ module.exports = function(RED) {
     { type: "automation-mqtt-tls", label: "MQTT TLS", leaf: "/cmd", command: "mqtt_tls", buildPayload: buildMqttTlsPayload },
     { type: "automation-mqtt-timeout", label: "MQTT Timeout", leaf: "/cmd", command: "mqtt_timeout", buildPayload: buildIntegerFieldPayload("mqtt_timeout", "seconds", 0, 3600) },
     { type: "automation-mqtt-fallback", label: "MQTT Fallback", leaf: "/cmd", command: "mqtt_fallback", buildPayload: buildEnumPayload("mqtt_fallback", "mode", [0, 1, 2]) },
-    { type: "automation-wifi-portal-timeout", label: "WiFi Portal Timeout", leaf: "/cmd", command: "wifi_portal_timeout", buildPayload: buildIntegerFieldPayload("wifi_portal_timeout", "seconds", 30, 1800) },
     { type: "automation-reset-wifi", label: "Reset WiFi", leaf: "/cmd", command: "reset_wifi", buildPayload: buildSignalPayload("reset_wifi") },
     { type: "automation-over-temp", label: "Over Temp", leaf: "/cmd", command: "over_temp", buildPayload: buildFloatFieldPayload("over_temp", "overTempC", 20, 140) },
     { type: "automation-control-lock", label: "Control Lock", leaf: "/cmd", command: "control_lock", buildPayload: buildEnumPayload("control_lock", "controlLock", [0, 1, 2]) },

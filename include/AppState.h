@@ -87,6 +87,12 @@ enum class AlarmCode : uint8_t {
   HighProcessTemp
 };
 
+enum class AlarmSeverity : uint8_t {
+  Advisory = 0,
+  Warning,
+  Critical
+};
+
 struct ProcessStage {
   char name[20];
   float targetC {0.0f};
@@ -163,7 +169,9 @@ struct PersistentConfig {
   char mqttTlsCaCert[768] {""};      // PEM
   uint16_t mqttCommsTimeoutSec {0};
   MqttFallbackMode mqttFallbackMode {MqttFallbackMode::HoldSetpoint};
-  uint16_t wifiPortalTimeoutSec {CoreConfig::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC};
+  uint16_t controllerLossGraceSec {CoreConfig::DEFAULT_CONTROLLER_LOSS_GRACE_SEC};
+  uint16_t warmupTimeoutMinutes {CoreConfig::DEFAULT_WARMUP_TIMEOUT_MINUTES};
+  uint16_t maxContinuousHeatMinutes {CoreConfig::DEFAULT_MAX_CONTINUOUS_HEAT_MINUTES};
   float pidKp {CoreConfig::PID_KP};
   float pidKi {CoreConfig::PID_KI};
   float pidKd {CoreConfig::PID_KD};
@@ -206,6 +214,7 @@ struct RuntimeState {
   bool tempPlausible {true};
   bool probeAPlausible {true};
   bool probeBPlausible {true};
+  bool sensorCalibrationSane {true};
   bool heatingEnabled {false};
   bool stageTimerStarted {false};
   bool pendingProfileCompletePublish {false};
@@ -226,9 +235,19 @@ struct RuntimeState {
   uint32_t lastAcceptedRemoteCommandAtMs {0};
   uint32_t pairingWindowEndsAtMs {0};
   uint32_t lastControllerSupervisionAtMs {0};
+  uint32_t startupAlarmInhibitUntilMs {0};
+  uint32_t reconnectAlarmInhibitUntilMs {0};
+  uint32_t autotuneAlarmInhibitUntilMs {0};
+  uint32_t lastProbeAValidAtMs {0};
+  uint32_t lastProbeBValidAtMs {0};
+  uint32_t heatOnContinuousSinceMs {0};
+  uint32_t controllerLossAtMs {0};
   char systemId[24] {"unbound"};
   char systemName[32] {""};
   char controllerId[24] {""};
+  char controllerFallbackCause[24] {"none"};
+  char lastStartBlockReason[40] {""};
+  char lastSetpointClampReason[48] {""};
 
   uint8_t currentStageIndex {0};
   uint32_t activeStageMinutes {CoreConfig::DEFAULT_STAGE_MINUTES};

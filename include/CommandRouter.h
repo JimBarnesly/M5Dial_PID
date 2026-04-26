@@ -28,7 +28,11 @@ struct CommandRouterServices {
   void (*persistActivePidAndQuality)();
   void (*logRuntimeEvent)(const char* text);
   void (*syncAlarmFromManager)();
+  void (*clearStoredNetworking)();
   bool (*upsertProfileFromJson)(const JsonDocument& doc, uint8_t* outIndex);
+  void (*applyLocalAuthorityOverride)(bool enabled);
+  const char* (*startInterlockReason)(bool profileRun);
+  void (*publishLifecycleEvent)(const char* type, const char* detail, const char* cause);
 };
 
 void routeMqttCommand(const char* topic, const char* payload, CommandRouterServices& services);

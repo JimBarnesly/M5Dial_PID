@@ -3,15 +3,15 @@
 #include <cstring>
 
 namespace {
-constexpr uint8_t kRootItemCount = 7;
-constexpr uint8_t kStatusItemCount = 10;
+constexpr uint8_t kRootItemCount = 8;
 constexpr uint8_t kControlItemCount = 9;
 constexpr uint8_t kAlarmItemCount = 9;
 constexpr uint8_t kAlarmLogItemCount = 10;
 constexpr uint8_t kPidItemCount = 7;
 constexpr uint8_t kNetworkItemCount = 6;
 constexpr uint8_t kIntegrationItemCount = 5;
-constexpr uint8_t kDeviceItemCount = 7;
+constexpr uint8_t kDeviceItemCount = 6;
+constexpr uint8_t kDiagnosticsItemCount = 7;
 
 const MenuItemDefinition kRootItems[kRootItemCount] = {
   {MenuItemId::RootControl, "Control", MenuItemKind::Submenu, MenuScreenId::Control},
@@ -20,20 +20,8 @@ const MenuItemDefinition kRootItems[kRootItemCount] = {
   {MenuItemId::RootNetwork, "Network", MenuItemKind::Submenu, MenuScreenId::Network},
   {MenuItemId::RootIntegration, "Integration", MenuItemKind::Submenu, MenuScreenId::Integration},
   {MenuItemId::RootDevice, "Device", MenuItemKind::Submenu, MenuScreenId::Device},
+  {MenuItemId::RootDiagnostics, "Diagnostics", MenuItemKind::Submenu, MenuScreenId::Diagnostics},
   {MenuItemId::RootExit, "Exit", MenuItemKind::Exit, MenuScreenId::Root}
-};
-
-const MenuItemDefinition kStatusItems[kStatusItemCount] = {
-  {MenuItemId::StatusOperatingMode, "Operating Mode", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusAuthority, "Authority", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusSystemName, "System Name", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusControllerLink, "Controller Link", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusWifi, "Wi-Fi", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusMqtt, "MQTT", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusProcessVariable, "Process Variable", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusOutput, "Output", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusAlarm, "Alarm", MenuItemKind::ReadOnly, MenuScreenId::Status},
-  {MenuItemId::StatusBack, "Back", MenuItemKind::Back, MenuScreenId::Root}
 };
 
 const MenuItemDefinition kControlItems[kControlItemCount] = {
@@ -106,20 +94,29 @@ const MenuItemDefinition kDeviceItems[kDeviceItemCount] = {
   {MenuItemId::DeviceCalibrationOffset, "Calibration Offset", MenuItemKind::Value, MenuScreenId::Device},
   {MenuItemId::DeviceDeviceId, "Device ID", MenuItemKind::ReadOnly, MenuScreenId::Device},
   {MenuItemId::DeviceFirmware, "Firmware", MenuItemKind::ReadOnly, MenuScreenId::Device},
-  {MenuItemId::DeviceResetWifi, "Reset Wi-Fi", MenuItemKind::Action, MenuScreenId::Device},
   {MenuItemId::DeviceBack, "Back", MenuItemKind::Back, MenuScreenId::Root}
+};
+
+const MenuItemDefinition kDiagnosticsItems[kDiagnosticsItemCount] = {
+  {MenuItemId::DiagnosticsAuthority, "Authority", MenuItemKind::ReadOnly, MenuScreenId::Diagnostics},
+  {MenuItemId::DiagnosticsController, "Controller State", MenuItemKind::ReadOnly, MenuScreenId::Diagnostics},
+  {MenuItemId::DiagnosticsProbeA, "Probe A", MenuItemKind::ReadOnly, MenuScreenId::Diagnostics},
+  {MenuItemId::DiagnosticsProbeB, "Probe B", MenuItemKind::ReadOnly, MenuScreenId::Diagnostics},
+  {MenuItemId::DiagnosticsPidLive, "Live PID", MenuItemKind::ReadOnly, MenuScreenId::Diagnostics},
+  {MenuItemId::DiagnosticsHeat, "Heat Service", MenuItemKind::ReadOnly, MenuScreenId::Diagnostics},
+  {MenuItemId::DiagnosticsBack, "Back", MenuItemKind::Back, MenuScreenId::Root}
 };
 
 const MenuScreenDefinition kScreens[] = {
   {MenuScreenId::Root, "Menu", kRootItems, kRootItemCount},
-  {MenuScreenId::Status, "Status", kStatusItems, kStatusItemCount},
   {MenuScreenId::Control, "Control", kControlItems, kControlItemCount},
   {MenuScreenId::Alarm, "Alarm", kAlarmItems, kAlarmItemCount},
   {MenuScreenId::AlarmLog, "Alarm Log", kAlarmLogItems, kAlarmLogItemCount},
   {MenuScreenId::PidSettings, "PID Settings", kPidItems, kPidItemCount},
   {MenuScreenId::Network, "Network", kNetworkItems, kNetworkItemCount},
   {MenuScreenId::Integration, "Integration", kIntegrationItems, kIntegrationItemCount},
-  {MenuScreenId::Device, "Device", kDeviceItems, kDeviceItemCount}
+  {MenuScreenId::Device, "Device", kDeviceItems, kDeviceItemCount},
+  {MenuScreenId::Diagnostics, "Diagnostics", kDiagnosticsItems, kDiagnosticsItemCount}
 };
 }
 

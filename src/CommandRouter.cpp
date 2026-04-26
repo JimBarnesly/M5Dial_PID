@@ -9,11 +9,11 @@ constexpr char Setpoint[] = "/cmd/setpoint";
 constexpr char MqttHost[] = "/cmd/mqtt_host";
 constexpr char OverTemp[] = "/cmd/over_temp";
 constexpr char ControlLock[] = "/cmd/control_lock";
+constexpr char LocalAuthorityOverride[] = "/cmd/local_authority_override";
 constexpr char MqttPort[] = "/cmd/mqtt_port";
 constexpr char MqttTls[] = "/cmd/mqtt_tls";
 constexpr char MqttTimeout[] = "/cmd/mqtt_timeout";
 constexpr char MqttFallback[] = "/cmd/mqtt_fallback";
-constexpr char WifiPortalTimeout[] = "/cmd/wifi_portal_timeout";
 constexpr char ResetWifi[] = "/cmd/reset_wifi";
 constexpr char Pid[] = "/cmd/pid";
 constexpr char PidKp[] = "/cmd/pid_kp";
@@ -41,6 +41,30 @@ constexpr char CalibrationStatus[] = "/cmd/calibration_status";
 namespace {
 bool finitePositive(float v) {
   return isfinite(v) && v > 0.0f;
+}
+
+bool parseBoolField(const JsonDocument& doc, const char* primaryKey, const char* secondaryKey, bool* outValue) {
+  if (primaryKey && !doc[primaryKey].isNull()) {
+    if (doc[primaryKey].is<bool>()) {
+      *outValue = doc[primaryKey].as<bool>();
+      return true;
+    }
+    if (doc[primaryKey].is<int>()) {
+      *outValue = doc[primaryKey].as<int>() != 0;
+      return true;
+    }
+  }
+  if (secondaryKey && !doc[secondaryKey].isNull()) {
+    if (doc[secondaryKey].is<bool>()) {
+      *outValue = doc[secondaryKey].as<bool>();
+      return true;
+    }
+    if (doc[secondaryKey].is<int>()) {
+      *outValue = doc[secondaryKey].as<int>() != 0;
+      return true;
+    }
+  }
+  return false;
 }
 
 float clampSetpointToLimits(const PersistentConfig& cfg, float requested) {
@@ -89,8 +113,10 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
     if (cmdKey.equalsIgnoreCase("mqtt_port") && !doc["mqtt_port"].isNull()) doc["port"] = doc["mqtt_port"];
     if (cmdKey.equalsIgnoreCase("mqtt_tls") && !doc["mqtt_tls"].isNull()) doc["enabled"] = doc["mqtt_tls"];
     if (cmdKey.equalsIgnoreCase("mqtt_timeout") && !doc["mqtt_timeout"].isNull()) doc["seconds"] = doc["mqtt_timeout"];
-    if (cmdKey.equalsIgnoreCase("wifi_portal_timeout") && !doc["wifi_portal_timeout"].isNull()) doc["seconds"] = doc["wifi_portal_timeout"];
     if (cmdKey.equalsIgnoreCase("mqtt_fallback") && !doc["mqtt_fallback"].isNull()) doc["mode"] = doc["mqtt_fallback"];
+    if (cmdKey.equalsIgnoreCase("local_authority_override") && !doc["localAuthorityOverride"].isNull()) {
+      doc["enabled"] = doc["localAuthorityOverride"];
+    }
 
     if (cmdKey.length() > 0) {
       cmdKey.trim();
@@ -151,8 +177,17 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
         reason = "local_authority_override";
       } else {
         services.rt.controlMode = ControlMode::Remote;
-        services.cfg.localSetpointC = clampSetpointToLimits(services.cfg, requested);
+        const float clamped = clampSetpointToLimits(services.cfg, requested);
+        services.cfg.localSetpointC = clamped;
         services.rt.currentSetpointC = services.cfg.localSetpointC;
+        services.rt.lastSetpointClampReason[0] = '\0';
+        if (fabsf(clamped - requested) > 0.001f) {
+          strlcpy(services.rt.lastSetpointClampReason,
+                  "remote_setpoint_clamped",
+                  sizeof(services.rt.lastSetpointClampReason));
+          services.logRuntimeEvent("Remote setpoint clamped to local safety limits");
+          services.publishLifecycleEvent("setpoint_clamped", "remote_setpoint", "local_safety_limits");
+        }
         services.storage.save(services.cfg);
         services.display.requestImmediateUi();
       }
@@ -218,6 +253,32 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
       } else {
         applied = false;
         reason = "invalid_control_lock";
+      }
+    }
+  } else if (t.endsWith(CommandSuffix::LocalAuthorityOverride)) {
+    command = "local_authority_override";
+    accepted = true;
+    if (controlLockedLocalOnly) {
+      applied = false;
+      reason = "control_lock_local_only";
+    } else if (services.rt.operatingMode != OperatingMode::Integrated) {
+      applied = false;
+      reason = "not_integrated";
+    } else {
+      bool enabled = false;
+      if (!parseBoolField(doc, "enabled", "value", &enabled)) {
+        applied = false;
+        reason = "invalid_local_authority_override";
+      } else {
+        services.applyLocalAuthorityOverride(enabled);
+        services.storage.save(services.cfg);
+        if (services.rt.mqttConnected) services.mqtt.publishConfig(services.cfg, services.rt);
+        services.logRuntimeEvent(enabled ? "Local authority override enabled (remote)"
+                                         : "Local authority override cleared (remote)");
+        services.publishLifecycleEvent("authority_changed",
+                                       enabled ? "local_override" : "controller",
+                                       "remote_command");
+        services.display.invalidateAll();
       }
     }
   } else if (t.endsWith(CommandSuffix::MqttPort)) {
@@ -293,24 +354,6 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
         reason = "invalid_mqtt_fallback";
       }
     }
-  } else if (t.endsWith(CommandSuffix::WifiPortalTimeout)) {
-    command = "wifi_portal_timeout";
-    accepted = true;
-    if (controlLockedLocalOnly) {
-      applied = false;
-      reason = "control_lock_local_only";
-    } else {
-      const int timeout = doc["seconds"] | parsePayloadInt(-1);
-      if (timeout >= 30 && timeout <= 1800) {
-        services.cfg.wifiPortalTimeoutSec = static_cast<uint16_t>(timeout);
-        services.storage.save(services.cfg);
-        if (services.rt.mqttConnected) services.mqtt.publishConfig(services.cfg, services.rt);
-        services.display.invalidateAll();
-      } else {
-        applied = false;
-        reason = "invalid_wifi_timeout";
-      }
-    }
   } else if (t.endsWith(CommandSuffix::ResetWifi)) {
     command = "reset_wifi";
     accepted = true;
@@ -318,7 +361,7 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
       applied = false;
       reason = "control_lock_local_only";
     } else {
-      services.wifi.resetSettings();
+      services.clearStoredNetworking();
       services.logRuntimeEvent("WiFi settings reset (remote)");
     }
   } else if (t.endsWith(CommandSuffix::Pid)) {
@@ -450,6 +493,13 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
       finishAck();
       return;
     }
+    if (const char* interlock = services.startInterlockReason(true)) {
+      applied = false;
+      reason = interlock;
+      services.publishLifecycleEvent("run_start_blocked", "profile_start", interlock);
+      finishAck();
+      return;
+    }
     const int index = doc["index"] | static_cast<int>(services.cfg.activeProfileIndex);
     if (index < 0 || index >= services.cfg.profileCount) {
       applied = false;
@@ -458,6 +508,7 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
       return;
     }
     services.cfg.activeProfileIndex = static_cast<uint8_t>(index);
+    services.rt.lastStartBlockReason[0] = '\0';
     services.stages.startProfile(services.cfg.activeProfileIndex);
     services.completionHandled = false;
     services.logRuntimeEvent("Profile run started");
@@ -557,6 +608,14 @@ void routeMqttCommand(const char* topic, const char* payload, CommandRouterServi
       finishAck();
       return;
     }
+    if (const char* interlock = services.startInterlockReason(false)) {
+      applied = false;
+      reason = interlock;
+      services.publishLifecycleEvent("run_start_blocked", "manual_start", interlock);
+      finishAck();
+      return;
+    }
+    services.rt.lastStartBlockReason[0] = '\0';
     services.stages.start();
     services.completionHandled = false;
     services.logRuntimeEvent("Run started");

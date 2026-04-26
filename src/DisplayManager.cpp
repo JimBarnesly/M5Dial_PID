@@ -258,13 +258,26 @@ void DisplayManager::cacheMenuState(const MenuRenderState& menuState) {
 }
 
 void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
-  auto& d = M5Dial.Display;
-  d.fillScreen(BG);
+  static M5Canvas menuCanvas(&M5Dial.Display);
+  static bool menuCanvasReady = false;
+  if (!menuCanvasReady) {
+    menuCanvas.setColorDepth(16);
+    menuCanvas.createSprite(240, 240);
+    menuCanvasReady = true;
+  }
 
-  d.fillCircle(kCx, kCy, 116, rgb(7, 11, 16));
-  d.drawCircle(kCx, kCy, 116, rgb(20, 34, 42));
-  d.drawCircle(kCx, kCy, 108, rgb(14, 24, 31));
-  d.drawArc(kCx, kCy, 116, 114, 210, 320, rgb(38, 68, 82));
+  auto& d = menuCanvas;
+  const uint16_t menuBg = rgb(7, 11, 16);
+  const uint16_t menuOuter = rgb(20, 34, 42);
+  const uint16_t menuInner = rgb(14, 24, 31);
+  const uint16_t menuAccent = rgb(38, 68, 82);
+  const int centerY = 120;
+  const int selectedBoxY = 92;
+  d.fillScreen(BG);
+  d.fillCircle(kCx, kCy, 116, menuBg);
+  d.drawCircle(kCx, kCy, 116, menuOuter);
+  d.drawCircle(kCx, kCy, 108, menuInner);
+  d.drawArc(kCx, kCy, 116, 114, 210, 320, menuAccent);
 
   d.setTextDatum(top_center);
   d.setTextColor(FG_MUTED, BG);
@@ -272,9 +285,6 @@ void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
   d.drawString(menuState.title[0] ? menuState.title : "MENU", 120, 18);
 
   const int selected = menuState.selectedIndex;
-  const int centerY = 120;
-  const int selectedBoxY = 92;
-  d.fillRoundRect(22, selectedBoxY, 196, 54, 16, rgb(14, 31, 42));
   d.drawRoundRect(22, selectedBoxY, 196, 54, 16, menuState.editing ? GOLD : rgb(58, 98, 116));
 
   for (int distance = -2; distance <= 2; ++distance) {
@@ -290,7 +300,7 @@ void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
     uint16_t color = FG;
 
     if (isSelected) {
-      y = centerY - 10;
+      y = (item.value[0] != '\0') ? centerY - 8 : centerY;
       font = &fonts::Font4;
       color = FG;
     } else if (absDistance == 1) {
@@ -305,7 +315,7 @@ void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
 
     d.setFont(font);
     d.setTextDatum(middle_center);
-    d.setTextColor(color, BG);
+    d.setTextColor(color, menuBg);
     d.drawString(item.label, 120, y);
 
     if (!isSelected) continue;
@@ -313,15 +323,15 @@ void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
     if (item.kind == MenuItemKind::Submenu) {
       d.setTextDatum(middle_right);
       d.setFont(&fonts::Font2);
-      d.setTextColor(rgb(144, 198, 224), BG);
+      d.setTextColor(rgb(144, 198, 224), menuBg);
       d.drawString(">", 206, centerY);
     }
 
     if (item.value[0] != '\0') {
       d.setTextDatum(top_center);
       d.setFont(&fonts::Font2);
-      d.setTextColor(menuState.editing ? GOLD : rgb(132, 205, 238), BG);
-      d.drawString(item.value, 120, centerY + 10);
+      d.setTextColor(menuState.editing ? GOLD : rgb(132, 205, 238), menuBg);
+      d.drawString(item.value, 120, centerY + 8);
     }
   }
 
@@ -329,9 +339,11 @@ void DisplayManager::drawMenuScreen(const MenuRenderState& menuState) {
     const MenuRenderItem& selectedItem = menuState.items[menuState.selectedIndex];
     d.setTextDatum(bottom_center);
     d.setFont(&fonts::Font0);
-    d.setTextColor(rgb(120, 130, 136), BG);
+    d.setTextColor(rgb(120, 130, 136), menuBg);
     d.drawString(menuFooterText(selectedItem, menuState.editing), 120, 226);
   }
+
+  menuCanvas.pushSprite(0, 0);
 }
 
 void DisplayManager::drawMessageScreen(const char* title, const char* detail, const char* footer) {
@@ -419,7 +431,12 @@ void DisplayManager::drawStagePill(const RuntimeState& rt, const ProcessStage* s
   else if (stage) text = stage->name;
   else text = "IDLE";
 
-  if (!force && strcmp(_lastStageName, text) == 0 && _lastAlarm == rt.activeAlarm && _lastRunState == rt.runState && _lastUiMode == rt.uiMode) return;
+  if (!force &&
+      strcmp(_lastStageName, text) == 0 &&
+      _lastAlarm == rt.activeAlarm &&
+      _lastRunState == rt.runState &&
+      _lastUiMode == rt.uiMode &&
+      _lastControlAuthority == rt.controlAuthority) return;
 
   auto& d = M5Dial.Display;
   d.fillRect(kStageTextX, kStageTextY, kStageTextW, kStageTextH, BG);
@@ -434,13 +451,21 @@ void DisplayManager::drawStagePill(const RuntimeState& rt, const ProcessStage* s
     d.drawString("TAP TO ACK", kPillCenterX, kPillY + 14);
   } else {
     d.setTextColor(FG_MUTED, BG);
-    d.drawString(text, kPillCenterX, kPillY + 5);
+    if (rt.controlAuthority == ControlAuthority::LocalOverride) {
+      d.drawString(text, kPillCenterX, kPillY + 1);
+      d.setFont(&fonts::Font0);
+      d.setTextColor(GOLD, BG);
+      d.drawString("LOCAL OVR", kPillCenterX, kPillY + 14);
+    } else {
+      d.drawString(text, kPillCenterX, kPillY + 5);
+    }
   }
 
   strlcpy(_lastStageName, text, sizeof(_lastStageName));
   _lastAlarm = rt.activeAlarm;
   _lastRunState = rt.runState;
   _lastUiMode = rt.uiMode;
+  _lastControlAuthority = rt.controlAuthority;
 }
 
 void DisplayManager::drawCenterTemp(const RuntimeState& rt, uint32_t now, bool force) {

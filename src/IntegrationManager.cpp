@@ -221,9 +221,15 @@ void IntegrationManager::markEnrollmentSuccess(const JsonDocument& doc) {
 
 void IntegrationManager::noteControllerSupervision() {
   if (!_rt) return;
+  const bool wasOffline = !_rt->controllerConnected || _rt->integratedFallbackActive || _rt->controllerLossAtMs != 0;
   _rt->controllerConnected = true;
   _rt->lastControllerSupervisionAtMs = millis();
+  _rt->controllerLossAtMs = 0;
+  strlcpy(_rt->controllerFallbackCause, "none", sizeof(_rt->controllerFallbackCause));
   clearControllerDisconnectFallback();
+  if (wasOffline && _mqtt && _mqtt->isConnected()) {
+    _mqtt->publishLifecycleEvent("controller_supervision_restored", "connected", "heartbeat");
+  }
 }
 
 void IntegrationManager::applyControllerDisconnectFallback() {
@@ -232,6 +238,9 @@ void IntegrationManager::applyControllerDisconnectFallback() {
 
   _rt->integratedFallbackActive = true;
   _rt->controllerConnected = false;
+  if (_mqtt && _mqtt->isConnected()) {
+    _mqtt->publishLifecycleEvent("controller_fallback_active", _rt->controllerFallbackCause, "grace_elapsed");
+  }
   switch (_rt->deviceType) {
     case DeviceType::ThermalController:
       // Thermal controllers keep local real-time control active and hold their
@@ -275,9 +284,31 @@ void IntegrationManager::update() {
   if (_binding->integrationState == IntegrationState::Enrolled) {
     const bool supervisionTimedOut = (_rt->lastControllerSupervisionAtMs != 0) &&
                                      (millis() - _rt->lastControllerSupervisionAtMs >= CoreConfig::CONTROLLER_SUPERVISION_TIMEOUT_MS);
-    if (!_rt->mqttConnected || supervisionTimedOut) {
-      applyControllerDisconnectFallback();
+    const bool supervisionLost = !_rt->wifiConnected || !_rt->mqttConnected || supervisionTimedOut;
+    if (supervisionLost) {
+      const char* cause =
+          !_rt->wifiConnected ? "wifi_offline"
+          : !_rt->mqttConnected ? "mqtt_offline"
+          : "controller_timeout";
+      strlcpy(_rt->controllerFallbackCause, cause, sizeof(_rt->controllerFallbackCause));
+      _rt->controllerConnected = false;
+      if (_rt->controllerLossAtMs == 0) {
+        _rt->controllerLossAtMs = millis();
+        Serial.printf("[INTEGRATION] controller supervision lost cause=%s grace_s=%u\n",
+                      cause,
+                      _cfg ? static_cast<unsigned>(_cfg->controllerLossGraceSec) : 0U);
+        if (_mqtt && _mqtt->isConnected()) {
+          _mqtt->publishLifecycleEvent("controller_supervision_lost", cause, "supervision_lost");
+        }
+      }
+      const uint32_t graceMs =
+          (_cfg ? static_cast<uint32_t>(_cfg->controllerLossGraceSec) : 0UL) * 1000UL;
+      if (graceMs == 0 || millis() - _rt->controllerLossAtMs >= graceMs) {
+        applyControllerDisconnectFallback();
+      }
     } else {
+      _rt->controllerLossAtMs = 0;
+      strlcpy(_rt->controllerFallbackCause, "none", sizeof(_rt->controllerFallbackCause));
       clearControllerDisconnectFallback();
     }
   }
@@ -354,7 +385,28 @@ void IntegrationManager::unpairToStandalone(bool clearWifiSettings) {
   _rt->integratedFallbackActive = false;
   _rt->pairingWindowActive = false;
   _rt->lastControllerSupervisionAtMs = 0;
+  _rt->controllerLossAtMs = 0;
+  strlcpy(_rt->controllerFallbackCause, "none", sizeof(_rt->controllerFallbackCause));
   if (clearWifiSettings && _wifi) _wifi->resetSettings();
+}
+
+void IntegrationManager::clearStoredNetworking() {
+  if (!_binding || !_storage || !_rt) return;
+
+  _binding->apSsid[0] = '\0';
+  _binding->apPsk[0] = '\0';
+  _binding->brokerHost[0] = '\0';
+  _binding->brokerPort = 0;
+  _binding->issuedAt = 0;
+  _binding->epoch = 0;
+  _storage->saveIntegrationBinding(*_binding);
+  syncRuntimeFromBinding();
+  _rt->controllerConnected = false;
+  _rt->integratedFallbackActive = false;
+  _rt->lastControllerSupervisionAtMs = 0;
+  Serial.printf("[INTEGRATION] stored networking cleared system_id=%s controller_id=%s\n",
+                _binding->systemId,
+                _binding->controllerId);
 }
 
 bool IntegrationManager::shouldBootIntegratedNetworking() const {

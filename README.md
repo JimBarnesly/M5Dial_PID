@@ -80,7 +80,7 @@ Supported command suffixes include:
 - `/cmd/pid`, `/cmd/pid_kp`, `/cmd/pid_ki`, `/cmd/pid_kd`
 - `/cmd/control_lock`
 - `/cmd/mqtt_port`, `/cmd/mqtt_tls`, `/cmd/mqtt_timeout`, `/cmd/mqtt_fallback`
-- `/cmd/wifi_portal_timeout`, `/cmd/reset_wifi`
+- `/cmd/reset_wifi`
 - `/cmd/get_config`, `/cmd/get_events`
 - `/cmd/profile_select`, `/cmd/profile_start`, `/cmd/profile_delete`, `/cmd/profile_upsert`
 - `/cmd/start_autotune`, `/cmd/accept_tune`, `/cmd/reject_tune`
@@ -107,14 +107,13 @@ Every outbound payload on `.../state` includes an `_type` field so you can route
 
 ## Secure commissioning and minimum safe defaults
 
-This firmware generates onboarding AP credentials per-device and supports secure MQTT transport options.
+This firmware uses explicit credential-driven Wi-Fi behavior and supports secure MQTT transport options.
 
-### 1) First boot / Wi-Fi onboarding
-- On first boot (or after clearing Wi-Fi credentials), the device starts a WiFiManager portal AP.
-- The AP SSID is generated per-device from hardware identity.
-- The AP password is derived from the device identity (MAC suffix) and printed in masked form on serial debug logs.
-- In serial debug logs, the AP password is masked so full credentials are not exposed.
-- Forced development Wi-Fi credentials are now opt-in only. Define `DEV_FORCE_WIFI_CREDENTIALS` at build time if you explicitly want the legacy forced-SSID behavior for development labs.
+### 1) First boot / Wi-Fi behavior
+- The device only attempts Wi-Fi when explicit credentials are available.
+- Testing mode uses the built-in development SSID/PSK override.
+- Integrated mode uses stored bootstrap/controller SSID/PSK received during commissioning.
+- If no explicit credentials exist, the device stays fully usable locally and does not launch a captive portal.
 
 ### 2) MQTT security modes
 Set these `PersistentConfig` fields before deployment (via your existing config channel):

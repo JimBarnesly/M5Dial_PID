@@ -60,6 +60,7 @@ private:
   bool _lastMqttConnected = false;
   bool _lastTestingModeActive = false;
   OperatingMode _lastOperatingMode = static_cast<OperatingMode>(255);
+  ControlAuthority _lastControlAuthority = static_cast<ControlAuthority>(255);
   AlarmCode _lastAlarm = static_cast<AlarmCode>(255);
   RunState _lastRunState = static_cast<RunState>(255);
   UiMode _lastUiMode = static_cast<UiMode>(255);

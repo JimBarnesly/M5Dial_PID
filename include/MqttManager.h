@@ -22,6 +22,7 @@ public:
   void publishProfileCompleteIfPending(RuntimeState& rt);
   void publishConfig(const PersistentConfig& cfg, const RuntimeState& rt);
   void publishEventLog(const RuntimeState& rt);
+  void publishLifecycleEvent(const char* type, const char* detail = nullptr, const char* cause = nullptr);
   bool publishRaw(const char* leaf, const char* payload, bool retained = false);
   bool isConnected();
   const char* clientId() const;

@@ -72,7 +72,9 @@ void StorageManager::loadDefaults(PersistentConfig& cfg) {
   cfg.mqttTlsCaCert[0] = '\0';
   cfg.mqttCommsTimeoutSec = 0;
   cfg.mqttFallbackMode = MqttFallbackMode::HoldSetpoint;
-  cfg.wifiPortalTimeoutSec = CoreConfig::DEFAULT_WIFI_PORTAL_TIMEOUT_SEC;
+  cfg.controllerLossGraceSec = CoreConfig::DEFAULT_CONTROLLER_LOSS_GRACE_SEC;
+  cfg.warmupTimeoutMinutes = CoreConfig::DEFAULT_WARMUP_TIMEOUT_MINUTES;
+  cfg.maxContinuousHeatMinutes = CoreConfig::DEFAULT_MAX_CONTINUOUS_HEAT_MINUTES;
   cfg.pidKp = CoreConfig::PID_KP;
   cfg.pidKi = CoreConfig::PID_KI;
   cfg.pidKd = CoreConfig::PID_KD;
@@ -138,7 +140,9 @@ bool StorageManager::load(PersistentConfig& cfg) {
   cfg.mqttTlsAuthMode = doc["mqttTlsAuthMode"] | cfg.mqttTlsAuthMode;
   cfg.mqttCommsTimeoutSec = doc["mqttCommsTimeoutSec"] | cfg.mqttCommsTimeoutSec;
   cfg.mqttFallbackMode = static_cast<MqttFallbackMode>((uint8_t)(doc["mqttFallbackMode"] | (uint8_t)cfg.mqttFallbackMode));
-  cfg.wifiPortalTimeoutSec = doc["wifiPortalTimeoutSec"] | cfg.wifiPortalTimeoutSec;
+  cfg.controllerLossGraceSec = doc["controllerLossGraceSec"] | cfg.controllerLossGraceSec;
+  cfg.warmupTimeoutMinutes = doc["warmupTimeoutMinutes"] | cfg.warmupTimeoutMinutes;
+  cfg.maxContinuousHeatMinutes = doc["maxContinuousHeatMinutes"] | cfg.maxContinuousHeatMinutes;
   const bool canLoadSecrets = encryptedStorageAvailable();
   if (canLoadSecrets) {
     strlcpy(cfg.mqttUser, doc["mqttUser"] | cfg.mqttUser, sizeof(cfg.mqttUser));
@@ -233,7 +237,9 @@ void StorageManager::save(const PersistentConfig& cfg) {
   doc["mqttTlsAuthMode"] = cfg.mqttTlsAuthMode;
   doc["mqttCommsTimeoutSec"] = cfg.mqttCommsTimeoutSec;
   doc["mqttFallbackMode"] = static_cast<uint8_t>(cfg.mqttFallbackMode);
-  doc["wifiPortalTimeoutSec"] = cfg.wifiPortalTimeoutSec;
+  doc["controllerLossGraceSec"] = cfg.controllerLossGraceSec;
+  doc["warmupTimeoutMinutes"] = cfg.warmupTimeoutMinutes;
+  doc["maxContinuousHeatMinutes"] = cfg.maxContinuousHeatMinutes;
   if (encryptedStorageAvailable()) {
     doc["mqttUser"] = cfg.mqttUser;
     doc["mqttPass"] = cfg.mqttPass;
